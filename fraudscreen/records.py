@@ -1,15 +1,20 @@
 """Compact per-install records produced by the scan and consumed by every sign."""
 from collections import namedtuple
 
-Visit = namedtuple("Visit", "t_ms host path query transition visit_id hist_id visit_count is_local tz bundle file ident_hint")
-Status = namedtuple("Status", "ts tz cpu nproc arch mem disks displays plat browser ver bundle file")
+# obs_s: when the record was written (the metadata timestamp), which is when its timezone was
+# observed; a backfilled history row carries the zone of the collection, not of the visit.
+Visit = namedtuple("Visit", "t_ms host path query transition visit_id hist_id visit_count is_local tz bundle file ident_hint obs_s",
+                   defaults=(None,))
+# removable: storage ids reported as removable media, which the hardware key leaves out
+Status = namedtuple("Status", "ts tz cpu nproc arch mem disks displays plat browser ver bundle file removable",
+                    defaults=(frozenset(),))
 Event = namedtuple("Event", "ts name count")
 Conversation = namedtuple("Conversation", "platform started_s")
 
 
 def new_install(ident):
     return {"ident": ident, "visits": [], "status": [], "events": [], "conversations": [],
-            "registered_at": None, "files": set(), "mail_identities": [], "unreadable": 0,
+            "registered_at": None, "files": set(), "mail_identities": [], "unreadable": 0, "no_time": 0,
             "chash": {}, "headless": False, "nonen_titles": {}}
 
 
@@ -24,6 +29,7 @@ def merge_install(into, part):
     into["files"] |= part["files"]
     into["mail_identities"].extend(part["mail_identities"])
     into["unreadable"] += part["unreadable"]
+    into["no_time"] = into.get("no_time", 0) + part.get("no_time", 0)
     for k, n in part["chash"].items():
         into["chash"][k] = into["chash"].get(k, 0) + n
     into["headless"] = into.get("headless", False) or bool(part.get("headless"))

@@ -1,6 +1,8 @@
-"""The four additive changes the fraud-screen package makes to the vendored redactor."""
+"""The additive changes the fraud-screen package makes to the vendored redactor."""
+import io
 import os
 import tempfile
+from contextlib import redirect_stdout
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,6 +16,7 @@ import re
 
 PID_A = fx.PID_A
 TOK = re.compile(TOKEN_RE)
+NO_AGENT = {v: "" for v in paths.AGENT_ENV_VARS}   # so the suite passes when an agent runs it
 
 
 class RuleChangeTests(unittest.TestCase):
@@ -68,7 +71,7 @@ class RedactCliChangeTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
 
     def test_safe_default_sibling_and_lowercase_rows(self):
-        with mock.patch.dict(os.environ, {"CLAUDECODE": ""}):
+        with mock.patch.dict(os.environ, NO_AGENT):
             code = redact.main(["--raw", str(self.raw), "--workers", "1"])
         self.assertEqual(code, 0)
         safe = self.raw.parent / "pull_redacted"
@@ -85,7 +88,7 @@ class RedactCliChangeTests(unittest.TestCase):
         keydir = self.tmp / "root" / ".redaction"
         keydir.mkdir()
         key = tokens.load_or_create_key(keydir / "key")
-        with mock.patch.dict(os.environ, {"CLAUDECODE": ""}):
+        with mock.patch.dict(os.environ, NO_AGENT):
             code = redact.main(["--raw", str(self.raw), "--safe", str(self.tmp / "safe"), "--workers", "1"])
         self.assertEqual(code, 0)
         self.assertFalse((self.raw / ".redaction").exists())
@@ -120,8 +123,8 @@ class CensusCaseTests(unittest.TestCase):
             fl.write_text(body % up.lower())
             cu, cl = census.census_file(fu), census.census_file(fl)
             self.assertEqual(dict(cl["errors"]), {})
-            self.assertEqual(set(cu["owners_hosts"]), {up.lower()})
-            self.assertEqual(set(cl["owners_hosts"]), {up.lower()})
+            self.assertEqual(set(cu["owners_hosts"]), {PID_A})   # owners are Prolific ids
+            self.assertEqual(set(cl["owners_hosts"]), {PID_A})
             merged = census.merge_census([cu, cl])
             self.assertEqual(merged["host_counts"]["rare.example"], 1)
             self.assertEqual(merged["prefix_counts"], {"weib_": 2})
@@ -138,3 +141,69 @@ class CensusCaseTests(unittest.TestCase):
             lines = Path(d, "identifiers.csv").read_text().splitlines()
             self.assertEqual(lines[0], "ident,prefix,pid,pid_created,install")
             self.assertTrue(any(line.endswith("," + lo_tok) for line in lines[1:]))
+
+
+class CensusPerParticipantTests(unittest.TestCase):
+    """Change 7: hosts are counted per Prolific id, so a Chrome+Edge pair is one participant and a
+    host three such pairs visited stays below a threshold of 5."""
+
+    def test_two_identifiers_of_one_pid_count_once(self):
+        from privacy import census
+        with tempfile.TemporaryDirectory() as d:
+            body = '[{"passive-data-metadata": {"source": "%s"}, "url": "https://rare.example/x"}]'
+            parts = []
+            for pre in ("AIMECcplc_", "AIMECeplc_"):
+                p = Path(d, f"{pre}{PID_A}1231__rex-history-visit__2026-09-14.json")
+                p.write_text(body % (pre + PID_A + "1231"))
+                parts.append(census.census_file(p))
+            self.assertEqual(census.merge_census(parts)["host_counts"], {"rare.example": 1})
+
+
+class ShortDeviceIdTests(unittest.TestCase):
+    """Change 8: a storage or display id under 6 characters identifies nothing and stays readable,
+    so the screen's short-id filter for M2 applies to redacted data as it does to raw data."""
+
+    def test_short_ids_are_not_tokenized(self):
+        from privacy.points import PointRedactor
+        from privacy.urls import Scrubber
+        tok = Tokenizer(b"k" * 32)
+        scanner = IdScanner(tok, known_hex=set(), prefix_counts={}, threshold=5)
+        urls = UrlRule(scanner)
+        r = PointRedactor(scanner, urls, Scrubber(scanner, urls))
+        out = r.redact({"passive-data-metadata": {"generator-id": "pdk-system-status"},
+                        "display-info": [{"id": "1"}, {"id": ""}, {"id": "2077749241"}]})
+        self.assertEqual([x["id"][:4] for x in out["display-info"]], ["1", "", "dev_"])
+
+    def test_short_storage_names_are_still_tokenized(self):
+        """A volume label is a name, not an id: 'JANE' must not pass through because it is short."""
+        from privacy.points import PointRedactor
+        from privacy.urls import Scrubber
+        tok = Tokenizer(b"k" * 32)
+        scanner = IdScanner(tok, known_hex=set(), prefix_counts={}, threshold=5)
+        urls = UrlRule(scanner)
+        r = PointRedactor(scanner, urls, Scrubber(scanner, urls))
+        out = r.redact({"passive-data-metadata": {"generator-id": "pdk-system-status"},
+                        "storage-info": [{"id": "1", "name": "JANE"}]})
+        self.assertEqual(out["storage-info"][0]["id"], "1")
+        self.assertRegex(out["storage-info"][0]["name"], r"^dev_[0-9a-f]{16}$")
+
+
+class CodexSessionTests(unittest.TestCase):
+    """Change 6: a Codex shell (CODEX_THREAD_ID or CODEX_SESSION_ID set) is refused the raw folder
+    exactly like a Claude Code shell."""
+
+    def test_codex_env_counts_as_an_agent_session(self):
+        for env in ({"CODEX_THREAD_ID": "t"}, {"CODEX_SESSION_ID": "s"}, {"CLAUDECODE": "1"}):
+            with mock.patch.dict(os.environ, {**NO_AGENT, **env}):
+                self.assertTrue(paths.inside_claude(), env)
+        with mock.patch.dict(os.environ, NO_AGENT):
+            self.assertFalse(paths.inside_claude())
+
+    def test_redactor_refuses_raw_folder_inside_codex(self):
+        with tempfile.TemporaryDirectory() as d:
+            guarded = Path(d, paths.RAW_FOLDER_NAME, "pull")
+            fx.build_raw(guarded)
+            with mock.patch.dict(os.environ, {**NO_AGENT, "CODEX_THREAD_ID": "t"}), redirect_stdout(io.StringIO()):
+                code = redact.main(["--raw", str(guarded), "--safe", str(Path(d, "safe")), "--workers", "1"])
+            self.assertEqual(code, 2)
+            self.assertFalse(Path(d, "safe").exists())

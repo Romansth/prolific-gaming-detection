@@ -29,8 +29,13 @@ _US = {
     "Pacific/Saipan": (10, False), "Pacific/Pago_Pago": (-11, False), "Pacific/Samoa": (-11, False),
     "US/Samoa": (-11, False), "US/East-Indiana": (-5, True), "US/Indiana-Starke": (-6, True),
     "US/Michigan": (-5, True), "US/Aleutian": (-10, True),
+    # POSIX-style names a Linux TZ variable or an old Windows box reports, and legacy aliases
+    "EST5EDT": (-5, True), "CST6CDT": (-6, True), "MST7MDT": (-7, True), "PST8PDT": (-8, True),
+    "EST": (-5, False), "MST": (-7, False), "HST": (-10, False), "America/Knox_IN": (-6, True),
+    "Navajo": (-7, True), "Pacific/Midway": (-11, False), "Pacific/Wake": (12, False), "Pacific/Johnston": (-10, False),
 }
 _US_PREFIXES = ("America/Indiana/", "America/Kentucky/", "America/North_Dakota/", "US/")
+_US_PREFIXES_LOWER = tuple(p.lower() for p in _US_PREFIXES)
 _ETC_RE = re.compile(r"^Etc/GMT([+-])(\d{1,2})$")
 # Standard offsets for non-US zones seen in participant data (no DST handling).
 _OTHER = {
@@ -43,12 +48,19 @@ _OTHER = {
     "America/Sao_Paulo": -3, "America/Argentina/Buenos_Aires": -3, "America/Toronto": -5,
     "America/Vancouver": -8, "Australia/Sydney": 10, "UTC": 0, "Etc/UTC": 0, "GMT": 0,
 }
+# zone names are matched without regard to case: a lower-cased "america/new_york" is still US
+_CANON = {k.lower(): k for k in list(_US) + list(_OTHER)}
+
+
+def canonical(name):
+    return _CANON.get((name or "").lower(), name or "")
 
 
 def is_us_zone(name):
     if not name:
         return False
-    if name in _US or name.startswith(_US_PREFIXES):
+    name = canonical(name)
+    if name in _US or name.lower().startswith(_US_PREFIXES_LOWER):
         return True
     m = _ETC_RE.match(name)
     return bool(m) and m.group(1) == "+" and 4 <= int(m.group(2)) <= 10
@@ -74,6 +86,7 @@ def _us_dst_active(ts_s, std_offset):
 
 def offset_hours(zone, ts_s):
     """UTC offset of zone at the instant ts_s (seconds), in hours."""
+    zone = canonical(zone)
     if USE_ZONEINFO and ZoneInfo is not None:
         try:
             z = ZoneInfo(zone)
@@ -84,8 +97,8 @@ def offset_hours(zone, ts_s):
     if zone in _US:
         std, dst = _US[zone]
         return std + (1 if dst and _us_dst_active(ts_s, std) else 0)
-    if zone.startswith(_US_PREFIXES):   # the Indiana and Kentucky counties not listed above are Eastern
-        std = -6 if zone.startswith("America/North_Dakota/") else -5
+    if zone.lower().startswith(_US_PREFIXES_LOWER):   # the Indiana and Kentucky counties not listed above are Eastern
+        std = -6 if zone.lower().startswith("america/north_dakota/") else -5
         return std + (1 if _us_dst_active(ts_s, std) else 0)
     m = _ETC_RE.match(zone or "")
     if m:  # Etc/GMT+6 means UTC-6

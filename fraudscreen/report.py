@@ -20,24 +20,18 @@ LIMITATIONS = (
     "No IP address exists in the data. Location rests on the device clock (a setting) and on Google's choice of a country-specific sign-in domain, which only occurs during Google sign-ins. A US clock plus a stable US VPN exit leaves no trace.",
     "A second Prolific account shows only when it is used in a browser profile the extension is installed in.",
     "Hardware keys discriminate on Windows and Linux (exact byte counts); stock Macs and Chromebooks collide and are not used for the shared-hardware sign.",
-    "In redacted mode page titles are absent (mail-identity and interface-language title checks are off), account age is known to the month, the antidetect launch page (M3) and the search patterns of m13 are tokenized away, foreign ids (M1, m2, m3), typed study links (m11) and study windows (m15) are seen only on allow-listed survey hosts (prolific, qualtrics, cloudresearch), and hosts visited by fewer than 5 participants appear as tokens.",
+    "In redacted mode page titles are absent (mail-identity and interface-language title checks are off), account age is known to the month and the batch rule of m6 is off, the antidetect launch page (M3) and the search patterns of m13 are tokenized away, foreign ids (M1, m2, m3) are seen on allow-listed survey hosts (prolific, qualtrics, cloudresearch) and on any other host only when the id belongs to an enrolled participant, typed study links (m11) and study windows (m15) are seen only on the allow-listed hosts, and hosts visited by fewer than 5 participants appear as tokens.",
+    "The fleet percentiles behind m8, m11 and m15 need at least 20 participants with enough visits; below that the fixed floors (20 %, 80 %, 30 %) alone apply.",
     "One folder is one run; nothing is remembered between runs.",
 )
 
 
 def participant_label(p):
     """'<pid> (<prefix>)': the id first, so a scrubbed report carries the same pid token as the
-    redacted data; Chrome and Edge installs of one participant show as '(AIMECcplc/eplc)'."""
+    redacted data; Chrome and Edge installs of one participant show as '(AIMECcplc/AIMECeplc)',
+    each prefix in full so the scrub's whole-word rare-prefix rule can hide one of them."""
     prefixes = sorted(p["prefixes"])
-    if len(prefixes) > 1:
-        split = [(re.search(r"[ce]pl", x), x) for x in prefixes]
-        if all(m for m, _ in split) and len({x[:m.start()] for m, x in split}) == 1:
-            stem = split[0][1][:split[0][0].start()]
-            label = stem + "/".join(x[m.start():] for m, x in split)
-        else:
-            label = "/".join(prefixes)
-    else:
-        label = prefixes[0] if prefixes else "?"
+    label = "/".join(prefixes) if prefixes else "?"
     return f"{p['key']} ({label})"
 
 
@@ -75,6 +69,7 @@ def render_markdown(results_by_key, participants, fleet, meta):
     out.append(f"# Participant screen: {meta.get('folder', '')}")
     out.append("")
     out.append(f"Mode: {meta.get('mode', '')}. Files: {meta.get('files', 0)}. Unreadable files: {meta.get('unreadable', 0)}. "
+               f"Files not read: {_skipped(meta.get('skipped_files'))}. Visits without a time: {meta.get('no_time', 0)}. "
                f"Installs: {meta.get('installs', 0)}. "
                f"Participants screened: {meta.get('participants', 0)} (skipped: {_skipped(meta.get('skipped'))}). "
                f"Dates: {meta.get('date_range', '')}. Tool version {meta.get('version', '')}, run time {meta.get('seconds', 0):.0f} s.")

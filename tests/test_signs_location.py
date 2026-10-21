@@ -102,6 +102,62 @@ class LocationTests(unittest.TestCase):
         plain = run(S.mk_participant(A, visits=[S.mk_visit("https://www.google.com/search?q=weather&hl=en", ts=T)], status=[S.mk_status()]))
         self.assertFalse(plain["m13"].fired)
 
+    def test_m4_calendar_days_and_territories(self):
+        a = S.mk_visit("https://accounts.google.co.ke/x", ts=T - (T % DAY) + 23 * 3600)
+        b = S.mk_visit("https://accounts.google.co.ke/x", ts=T - (T % DAY) + 7 * DAY + 3600, visit_id=2)
+        r = run(S.mk_participant(A, visits=[a, b]))
+        self.assertTrue(r["M4"].fired)
+        pr = run(S.mk_participant(A, visits=[S.mk_visit("https://accounts.google.com.pr/x", ts=T)]))
+        self.assertFalse(pr["M4"].fired or pr["m16"].fired)
+
+    def test_m5_counts_observation_days_not_visit_dates(self):
+        """One collection made under a London clock covers 20 days of history: London was seen once."""
+        backfill = [S.mk_visit(f"https://news.example/{i}", ts=T - i * DAY, visit_id=i + 1, tz="Europe/London")._replace(obs_s=T) for i in range(20)]
+        st = [S.mk_status(ts=T + i * 60) for i in range(60)]
+        r = run(S.mk_participant(A, visits=backfill, status=st))
+        self.assertFalse(r["M5"].fired)
+        self.assertTrue(r["m17"].fired)
+        self.assertTrue(any(n.startswith("1 days, 2% of 61 observation minutes") for n in r["m17"].notes), r["m17"].notes)
+
+    def test_m5_uses_local_dates(self):
+        """Nairobi points at 23:30 and 00:30 local fall on one UTC date but two local dates: 7 local
+        dates over 4 UTC dates, with US points keeping the share under half so only the days decide."""
+        base = T - (T % DAY)
+        st = [S.mk_status(ts=base + k * DAY + 20.5 * 3600, tz="Africa/Nairobi") for k in (0, 2, 4, 6)]
+        st += [S.mk_status(ts=base + k * DAY + 21.5 * 3600, tz="Africa/Nairobi") for k in (0, 2, 4)]
+        st += [S.mk_status(ts=base + 12 * 3600 + i * 60) for i in range(20)]
+        r = run(S.mk_participant(A, status=st))
+        self.assertTrue(r["M5"].fired)
+        self.assertTrue(any(n.startswith("7 days, 26%") for n in r["M5"].notes), r["M5"].notes)
+
+    def test_m6_rlz_hyphenated_and_lowercase_locales(self):
+        for rlz, cc in (("1C1CHBF_en-GBGB917GB917", "GB"), ("1C1CHBD_pt-BRBR1010BR1010", "BR"), ("1C1GCEU_es-419MX1000MX1000", "MX"),
+                        ("1c1onGR_enve1180ve1180", "VE"), ("1C1VDKB_filPH950PH950", "PH")):
+            r = run(S.mk_participant(A, visits=[S.mk_visit(f"https://www.google.com/search?q=x&rlz={rlz}", ts=T)]))
+            self.assertTrue(r["M6"].fired, rlz)
+            self.assertIn(f"codes: {cc}=1", r["M6"].notes[0])
+        us = run(S.mk_participant(A, visits=[S.mk_visit("https://www.google.com/search?q=x&rlz=1C1GCEA_enPR1000PR1000", ts=T)]))
+        self.assertFalse(us["M6"].fired)
+
+    def test_m13_english_variants_do_not_fire(self):
+        for hl in ("en-GB", "en_CA", "EN"):
+            self.assertFalse(run(S.mk_participant(A, visits=[S.mk_visit(f"https://www.google.com/search?q=x&hl={hl}", ts=T)]))["m13"].fired, hl)
+        self.assertTrue(run(S.mk_participant(A, visits=[S.mk_visit("https://www.google.com/search?q=x&hl=es-419", ts=T)]))["m13"].fired)
+
+    def test_m9_ignores_empty_zone_and_aliases(self):
+        st = [S.mk_status(ts=T), S.mk_status(ts=T + 600, tz=""), S.mk_status(ts=T + 1200),
+              S.mk_status(ts=T + 1800, tz="Asia/Calcutta"), S.mk_status(ts=T + 2400, tz="Asia/Kolkata")]
+        r = run(S.mk_participant(A, status=st))
+        self.assertEqual([e.what for e in r["m9"].evidence],
+                         ["America/New_York at 2026-09-14 00:43:15Z -> Asia/Calcutta at 2026-09-14 00:53:15Z"])
+
+    def test_m8_evidence_shows_applied_threshold(self):
+        vs = [S.mk_visit("https://a.example/%d" % i, ts=T - (T % DAY) + i * DAY + 6 * 3600 + (i % 4) * 3600, visit_id=i + 1) for i in range(100)]
+        p = S.mk_participant(A, visits=vs, status=[S.mk_status(tz="America/New_York")])
+        r = run(p, Fleet(enrolled_ids={A}, night_p95=0.05))
+        self.assertTrue(r["m8"].fired)
+        self.assertIn("threshold 20%", r["m8"].evidence[0].what)
+
     def test_context_notes_counts(self):
         vs = [S.mk_visit("https://secure.chase.com/", ts=T), S.mk_visit("https://www.walmart.com/", ts=T + 1, visit_id=2),
               S.mk_visit("https://www.kayak.com/", ts=T + 2, visit_id=3)]

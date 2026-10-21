@@ -7,7 +7,8 @@ from collections import Counter, namedtuple
 from fraudscreen.records import dedupe_install, merge_install, new_install
 
 ParsedIdent = namedtuple("ParsedIdent", "prefix pid study browser_hint install")
-_RAW_RE = re.compile(r"^([A-Za-z]+)_([0-9a-f]{24})\d*$")
+# the same identifier shape the redactor accepts: a cohort prefix may carry digits, the id may be typed in capitals
+_RAW_RE = re.compile(r"^([A-Za-z]+[A-Za-z0-9]*)_([0-9a-fA-F]{24})\d*$")
 _TOKEN_RE = re.compile(r"^(?:([A-Za-z]+)_)?(ident_[0-9a-f]{16})$")
 _PIDTOKEN_RE = re.compile(r"^([A-Za-z]+)_(pid_[0-9a-f]{16})\d*$")
 DEFAULT_EXCLUDE = ("playwright", "test", "kevin", "camilo", "bwtest", "keystone", "mitinta", "stas",
@@ -19,8 +20,10 @@ def default_exclude():
 
 
 def study_of(prefix):
+    """The study a cohort prefix belongs to, by its stem (WEIb and WEIx are both WEI cohorts; the
+    redactor reduces a rare prefix to the same stem)."""
     p = prefix.lower()
-    if p.startswith("weib"):
+    if p.startswith("wei"):
         return "WEI"
     if p.startswith("aimec"):
         return "AIM-EC"
@@ -40,7 +43,7 @@ def parse_ident(ident, identifiers_map=None):
     identifiers.csv carries in its `install` column."""
     m = _RAW_RE.match(ident)
     if m:
-        return ParsedIdent(m.group(1), m.group(2), study_of(m.group(1)), browser_hint(m.group(1)), ident.lower())
+        return ParsedIdent(m.group(1), m.group(2).lower(), study_of(m.group(1)), browser_hint(m.group(1)), ident.lower())
     m = _PIDTOKEN_RE.match(ident)
     if m:
         return ParsedIdent(m.group(1), m.group(2), study_of(m.group(1)), browser_hint(m.group(1)), ident.lower())
@@ -67,11 +70,17 @@ def oid_date(hex24):
     return dt.datetime.fromtimestamp(int(hex24[:8], 16), dt.timezone.utc).date()
 
 
-def _first_upload(inst):
-    ts = [s.ts for s in inst["status"]] + [v.t_ms / 1000 for v in inst["visits"]]
+def _enrolment(inst):
+    """When the install enrolled: the add-identifier record, else the first status point, else the
+    first visit. History rows can be backfilled from months before the install, so the earliest
+    visit is not the enrolment."""
     if inst["registered_at"] is not None:
-        ts.append(inst["registered_at"])
-    return min(ts) if ts else None
+        return inst["registered_at"]
+    if inst["status"]:
+        return min(s.ts for s in inst["status"])
+    if inst["visits"]:
+        return min(v.t_ms for v in inst["visits"]) / 1000
+    return None
 
 
 def group(installs, identifiers_csv, exclude):
@@ -100,7 +109,8 @@ def group(installs, identifiers_csv, exclude):
         pi = parsed[key]
         p = by_pid.setdefault(pi.pid, {"key": pi.pid, "study": pi.study, "installs": [], "prefixes": set(),
                                        "browsers": set(), "account_created": None, "account_resolution": None,
-                                       "first_upload": None, "duplicate_enrolment": False, "_lower_prefixes": set()})
+                                       "account_created_ts": None, "first_upload": None, "duplicate_enrolment": False,
+                                       "prefix_hidden": False, "_lower_prefixes": set()})
         p["installs"].append(inst)
         p["prefixes"].add(pi.prefix)
         p["_lower_prefixes"].add(pi.prefix.lower())
@@ -108,12 +118,13 @@ def group(installs, identifiers_csv, exclude):
             p["browsers"].add(s.browser)
         if not inst["status"] and pi.browser_hint:
             p["browsers"].add(pi.browser_hint)
-        fu = _first_upload(inst)
+        fu = _enrolment(inst)
         if fu is not None:
             p["first_upload"] = fu if p["first_upload"] is None else min(p["first_upload"], fu)
         if p["account_created"] is None:
             if re.fullmatch(r"[0-9a-f]{24}", pi.pid):
                 p["account_created"], p["account_resolution"] = oid_date(pi.pid), "day"
+                p["account_created_ts"] = int(pi.pid[:8], 16)
             elif idmap:
                 month = next((v[2] for v in idmap.values() if v[1] == pi.pid and v[2]), "")
                 if re.fullmatch(r"\d{4}-\d{2}", month):
@@ -121,8 +132,13 @@ def group(installs, identifiers_csv, exclude):
                     p["account_resolution"] = "month"
     out = []
     for p in by_pid.values():
-        labels = {re.sub(r"[ce]pl", "xpl", lp) for lp in p["_lower_prefixes"]}
-        p["duplicate_enrolment"] = len(labels) > 1
+        # a second enrolment is a second cohort label within one study; Chrome and Edge labels fold
+        # together, and a label the redactor blanked cannot be compared at all
+        by_study = {}
+        for lp in p["_lower_prefixes"]:
+            by_study.setdefault(study_of(lp), set()).add(re.sub(r"[ce]pl", "xpl", lp))
+        p["prefix_hidden"] = "" in p["_lower_prefixes"]
+        p["duplicate_enrolment"] = not p["prefix_hidden"] and any(len(v) > 1 for v in by_study.values())
         del p["_lower_prefixes"]
         _dedupe_across_installs(p)
         out.append(p)
@@ -144,17 +160,17 @@ def _dedupe_across_installs(p):
     if len(p["installs"]) < 2:
         return
     p["installs"].sort(key=lambda i: (0 if _browser_of(i) == "Chrome" else 1, i["ident"]))
-    kept = {}
+    kept = {}   # visit key -> (the list the kept copy sits in, its index); the list becomes inst["visits"]
     for inst in p["installs"]:
         out = []
         for v in inst["visits"]:
             k = (v.t_ms, v.host, v.path, v.query)
             if k in kept:
-                if v.is_local is False and kept[k][1].is_local is not False:
-                    first, idx = kept[k][0], kept[k][2]
-                    first["visits"][idx] = first["visits"][idx]._replace(is_local=False)
+                lst, idx = kept[k]
+                if v.is_local is False and lst[idx].is_local is not False:
+                    lst[idx] = lst[idx]._replace(is_local=False)
                 continue
-            kept[k] = (inst, v, len(out))
+            kept[k] = (out, len(out))
             out.append(v)
         inst["visits"] = out
 
@@ -162,7 +178,9 @@ def _dedupe_across_installs(p):
 def account_age_days(p):
     if p["account_resolution"] != "day" or p["first_upload"] is None:
         return None
-    created = dt.datetime.combine(p["account_created"], dt.time(), tzinfo=dt.timezone.utc).timestamp()
+    created = p.get("account_created_ts")   # the ObjectId's second, not its date: 29.1 days is not 30
+    if created is None:
+        created = dt.datetime.combine(p["account_created"], dt.time(), tzinfo=dt.timezone.utc).timestamp()
     return (p["first_upload"] - created) / 86400
 
 

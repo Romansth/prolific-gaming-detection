@@ -43,6 +43,13 @@ Other options: `--out`, `--csv`, `--workers N`, `--arms arms.json`, `--min-visit
 `--exclude-pattern REGEX`, `--key-dir`, `--safe`. Exit codes: 0 report written, 2 bad input or the
 redactor refused, 3 nothing screenable.
 
+Raw or redacted is decided from the file names (a real 24-hex id in a name means raw), never from
+a stray `identifiers.csv`. Two things are refused with exit 2 so that no real id reaches the
+shareable folder: a raw pull placed under `data-redacted/`, and `--out` pointing into `reports/`
+on raw data. Outside the repo layout, `--out X --redact` writes the token-only report to X and the
+real-id one to `X_team`. The report header counts the files that were not read (names that do not
+parse, archives that do not open) and the visits without a time, so a half-read pull is visible.
+
 To find a participant in the token-only report: `./screen.sh lookup <prolific id>` prints the
 `pid_…` token (an identifier or an e-mail address works too). It prints nothing else.
 
@@ -56,14 +63,20 @@ Inside a Claude Code session the screen refuses a `raw-data/` folder, and the ho
 `.claude/settings.json` blocks any call that names `raw-data/`, `reports-team/` or `.redaction/`
 or that reads recursively from the repo root (see `CLAUDE.md`).
 
+Codex gets the same rules. `AGENTS.md` mirrors `CLAUDE.md`, `.codex/hooks.json` runs the same
+guard, and the screen and redactor recognise a Codex shell by `CODEX_THREAD_ID`. Codex runs a
+project hook only after you trust it: open Codex in this folder, run `/hooks` and approve the
+guard (again after either file changes). The in-code refusal works without that step.
+
 ## Reading the report
 
 The table lists every participant with at least one sign, rows sorted by the number of major
 signs, one column per sign, `✓` (or `✓n` with a count) where it fired, `n/a` where the sign
 cannot be evaluated on this data. Under the table, one section per participant gives, for each
 fired sign, the rule, up to five evidence rows (UTC time, value as stored, source file), the
-full count, notes, and a fixed innocent reading. Appendix A gives every sign's rule and how many
-participants in this pull tripped it; Appendix B the signals deliberately excluded; Appendix C the
+full count, notes, and a fixed innocent reading. Appendix A gives every sign's rule, with the
+thresholds the code applies (minimum visits, calendar days, observation minutes, the 20-participant
+minimum for fleet percentiles), and how many participants in this pull tripped it; Appendix B the signals deliberately excluded; Appendix C the
 limitations.
 
 Major signs (the proof bar): M1 second Prolific id used in the monitored browser; M2 two enrolled

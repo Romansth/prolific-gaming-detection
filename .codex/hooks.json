@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$PWD\"; while [ \"$d\" != / ] && [ ! -f \"$d/.claude/hooks/guard.py\" ]; do d=$(dirname \"$d\"); done; if command -v python3 >/dev/null 2>&1; then exec python3 \"$d/.claude/hooks/guard.py\"; else exec python \"$d/.claude/hooks/guard.py\"; fi",
+            "timeout": 30,
+            "statusMessage": "Checking the data boundary"
+          }
+        ]
+      }
+    ]
+  }
+}

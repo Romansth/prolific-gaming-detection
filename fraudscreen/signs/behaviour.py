@@ -104,9 +104,12 @@ def score_behaviour(p, ctx):
     else:
         mine = {i for inst in p["installs"] for i in inst["mail_identities"]}
         owners = ctx.fleet.mail_identities if ctx.fleet else {}
+        # identities are numbered per run, never shown as their hash: an unkeyed SHA-1 of an address
+        # lets anyone holding a guessed address confirm it against the scrubbed report
+        number = {ident: k for k, ident in enumerate(sorted(owners), 1)}
         for ident in sorted(mine):
             for other in sorted(owners.get(ident, set()) - {p["key"]}):
-                r["m12"].add(Evidence("", f"{ident[0]} identity #{ident[1][:8]} also under {other}", ""))
+                r["m12"].add(Evidence("", f"{ident[0]} identity #{number.get(ident, 0)} also under {other}", ""))
                 r["m12"].link(other)
     # m14 automated reloads
     if any(inst.get("headless") for inst in p["installs"]):

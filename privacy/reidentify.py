@@ -39,7 +39,7 @@ def main(argv=None):
     raw = key_dir.parent
     if paths.inside_claude() and (paths.in_raw_folder(key_dir) or paths.in_raw_folder(out)
                                   or paths.within(out, paths.DEFAULT_PROCESSED)):
-        print("Refusing to run inside a Claude session: this writes real IDs. "
+        print("Refusing to run inside a Claude Code or Codex session: this writes real IDs. "
               "Run python3 -m privacy.reidentify in your own terminal.")
         return 2
     lookup = tokens.read_lookup(key_dir / "lookup.tsv")

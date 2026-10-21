@@ -55,7 +55,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn("skipped: internal 1", self.md)
         n = len(self.expected)
         self.assertIn(f"Participants screened: {n}", self.md)
-        self.assertIn(f"Installs: {n + 2}", self.md)   # +Edge sibling, +WEIx prefix; the internal id is skipped, the lower-case variant merged
+        self.assertIn(f"Installs: {n + 3}", self.md)   # +Edge sibling, +WEIx prefix, +AIMECcplc second-study install; the internal id is skipped, the lower-case variant merged
 
 
 if __name__ == "__main__":

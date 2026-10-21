@@ -15,15 +15,15 @@ class PathTests(unittest.TestCase):
         self.assertEqual(paths.DEFAULT_REPORTS.parent, paths.REPO)
 
     def test_inside_claude_reads_the_env(self):
-        old = os.environ.pop("CLAUDECODE", None)
+        old = {v: os.environ.pop(v) for v in paths.AGENT_ENV_VARS if v in os.environ}
         try:
             self.assertFalse(paths.inside_claude())
             os.environ["CLAUDECODE"] = "1"
             self.assertTrue(paths.inside_claude())
         finally:
-            os.environ.pop("CLAUDECODE", None)
-            if old is not None:
-                os.environ["CLAUDECODE"] = old
+            for v in paths.AGENT_ENV_VARS:
+                os.environ.pop(v, None)
+            os.environ.update(old)
 
 
 class TokenTests(unittest.TestCase):

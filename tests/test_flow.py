@@ -6,12 +6,13 @@ import os
 import re
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 from fraudscreen.__main__ import main
 from fraudscreen.lookup import main as lookup_main
+from privacy.paths import AGENT_ENV_VARS, find_key_dir
 from tests import synth as S
 
 HEX24 = re.compile(r"\b[0-9a-f]{24}\b")
@@ -25,7 +26,7 @@ class FlowTests(unittest.TestCase):
         cls.pull = cls.repo / "raw-data" / "oct-10"
         cls.expected = S.build_folder(cls.pull)
         buf = io.StringIO()
-        with mock.patch.dict(os.environ, {"CLAUDECODE": ""}), redirect_stdout(buf):
+        with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
             cls.code = main(["--data", str(cls.pull), "--redact", "--workers", "2"])
         cls.stdout = buf.getvalue()
 
@@ -88,8 +89,17 @@ class FlowTests(unittest.TestCase):
         md = extra[0].read_text()
         self.assertIn("Mode: redacted", md)
         self.assertIn("skipped: no_prolific_id 1", md.split("\n")[2])   # the internal id carries no pid token
-        self.assertIn("Installs: 34.", md.split("\n")[2])                # case variants merged through the install column
+        self.assertIn(f"Installs: {len(self.expected) + 3}.", md.split("\n")[2])   # same count as the raw screen: case variants merged through the install column
         self.assertNotIn(" ()", md)
+
+    def test_lookup_rejects_other_values(self):
+        """lookup prints a token or nothing: a device id, a host or a mistyped id must not be echoed."""
+        for value in ("shared-run-id", "news.example", S.PID_A[:23]):
+            buf, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(buf), redirect_stderr(err):
+                code = lookup_main([value, "--key-dir", str(find_key_dir(self.pull))])
+            self.assertEqual((code, buf.getvalue()), (1, ""), value)
+            self.assertIn("No token", err.getvalue())
 
     def test_lookup_finds_key_dir_from_cwd(self):
         m1_pid = next(pid for pid, exp in self.expected.items() if exp == {"M1"})

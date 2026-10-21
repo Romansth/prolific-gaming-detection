@@ -97,11 +97,14 @@ def mk_participant(pid, visits=(), status=(), study="WEI", registered_at=None, p
         inst["mail_identities"] = list(mail_identities)
         installs = [inst]
     ts = [s.ts for i in installs for s in i["status"]] + [v.t_ms / 1000 for i in installs for v in i["visits"]]
+    created_ts = None
     if account_created is None and len(pid) == 24 and all(c in "0123456789abcdef" for c in pid):
-        account_created = dt.datetime.fromtimestamp(int(pid[:8], 16), dt.timezone.utc).date()
+        created_ts = int(pid[:8], 16)
+        account_created = dt.datetime.fromtimestamp(created_ts, dt.timezone.utc).date()
     return {"key": pid, "study": study, "installs": installs, "prefixes": set(prefixes), "browsers": set(browsers),
             "account_created": account_created, "account_resolution": resolution if account_created else None,
-            "first_upload": min(ts) if ts else registered_at, "duplicate_enrolment": duplicate}
+            "account_created_ts": created_ts, "first_upload": min(ts) if ts else registered_at,
+            "duplicate_enrolment": duplicate, "prefix_hidden": False}
 
 
 # ---- full synthetic folder: one planted case per sign, plus clean participants and file-shape cases ----
@@ -270,6 +273,44 @@ def build_folder(root, idents_out=None):
             vs.append(visit(ident, "https://chatgpt.com/c/abc", 3001 + 3 * i, ts=t0 + 60))
         vs.append(visit(ident, f"https://app.prolific.com/submissions/complete?cc=X&PROLIFIC_PID={pid}&SESSION_ID={sess}", 3002 + 3 * i, ts=t0 + 600))
     emit(ident, vs, statuses(idx)); expected[pid] = {"m15"}
+    # ---- cases from the 2026-10-21 review: each fired, or stayed silent, for the wrong reason ----
+    # M6: a hyphenated install locale (en-GB) was missed by the rlz pattern
+    pid, ident, idx = participant()
+    vs = news(ident, 50) + [visit(ident, "https://www.google.com/search?q=weather&rlz=1C1CHBF_en-GBGB917GB917", 2000, ts=T0)]
+    emit(ident, vs, statuses(idx)); expected[pid] = {"M6"}
+    # m17, not M5: one collection written under a London clock covers 20 days of older history
+    pid, ident, idx = participant()
+    backfill = [dict(visit(ident, f"https://old.example/{i}", 2000 + i, ts=T0, tz="Europe/London"),
+                     visit_time=float(int((T0 - (i + 1) * DAY) * 1000))) for i in range(20)]
+    emit(ident, news(ident, 50) + backfill, statuses(idx, n=60)); expected[pid] = {"m17"}
+    # clean: hl=en-GB is English
+    pid, ident, idx = participant()
+    emit(ident, news(ident, 50) + [visit(ident, "https://www.google.com/search?q=weather&hl=en-GB", 2000, ts=T0)], statuses(idx))
+    expected[pid] = set()
+    # clean: an account 60 days old at enrolment whose history goes back 90 days (m6 once measured from the oldest visit)
+    pid, ident, idx = participant(created=int(T0 - 60 * DAY))
+    emit(ident, news(ident, 50, ts0=T0 - 90 * DAY), statuses(idx)); expected[pid] = set()
+    # clean: a status point with no zone between two New York points is not a switch
+    pid, ident, idx = participant()
+    st = [status(ident, ts=T0, **hw(idx)), status(ident, ts=T0 + 600, tz="", **hw(idx)), status(ident, ts=T0 + 1200, **hw(idx))]
+    emit(ident, news(ident, 50), st); expected[pid] = set()
+    # clean: one id enrolled in WEI and in AIM-EC is not a double enrolment (m7 is within one study); adds one install
+    pid, ident, idx = participant()
+    emit(ident, news(ident, 50), statuses(idx))
+    ident2 = f"AIMECcplc_{pid}1231"
+    write_file(root, ident2, "pdk-system-status", "2026-09-15", [status(ident2, ts=T0 + DAY + i * 60, **hw(idx)) for i in range(3)])
+    expected[pid] = set()
+    # clean: two Windows machines whose records carry no hardware fields share no key
+    for _ in range(2):
+        pid, ident, idx = participant()
+        st = [status(ident, ts=T0 + i * 60, cpu="", nproc=-1, mem=-1, disks=(), displays=hw(idx)["displays"]) for i in range(5)]
+        emit(ident, news(ident, 50), st); expected[pid] = set()
+    # clean: an id seen by A on day 0 and day 10 and by B on day 5 was never in one running browser
+    pa, ia, ixa = participant(); pb, ib, ixb = participant()
+    far = (("shared-id-far", 1022317891584),)
+    sa = [status(ia, ts=T0 + d * DAY + i * 60, mem=hw(ixa)["mem"], disks=far, displays=hw(ixa)["displays"]) for d in (0, 10) for i in range(3)]
+    sb = [status(ib, ts=T0 + 5 * DAY + i * 60, mem=hw(ixb)["mem"], disks=far, displays=hw(ixb)["displays"]) for i in range(3)]
+    emit(ia, news(ia, 50), sa); emit(ib, news(ib, 50), sb); expected[pa] = set(); expected[pb] = set()
     # clean participants: three plain, one Chrome+Edge pair, one with case variants and both file-name variants
     clean = []
     for k in range(3):

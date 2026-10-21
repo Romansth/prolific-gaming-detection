@@ -31,6 +31,11 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(P.parse_ident("WEIplaywrightCC_test07300000000000"))
         self.assertIsNone(P.parse_ident("unknown-id"))
 
+    def test_parse_uppercase_pid_and_digit_prefix(self):
+        """The redactor's IDENT_RE accepts both; the raw screen must not drop what the redactor keeps."""
+        self.assertEqual(P.parse_ident("WEIb2_" + PID.upper() + "1230").pid, PID)
+        self.assertEqual(P.parse_ident("WEIb2_" + PID.upper() + "1230").prefix, "WEIb2")
+
 
 class GroupTests(unittest.TestCase):
     def _folder(self, d, files):
@@ -85,6 +90,16 @@ class GroupTests(unittest.TestCase):
             self.assertEqual(p["account_resolution"], "day")
             self.assertAlmostEqual(P.account_age_days(p), (S.T0 - int(PID[:8], 16)) / 86400, delta=1.0)
 
+    def test_enrolment_time_prefers_registration_over_history(self):
+        """Backfilled history predates the install; account age is measured from enrolment."""
+        with tempfile.TemporaryDirectory() as d:
+            i = "WEIb_" + PID + "1230"
+            installs = self._folder(d, [(i, "ai-market-add-identifier", "2026-09-14", [S.add_identifier(i, ts=S.T0)], "plain"),
+                                        (i, "rex-history-visit", "2026-09-14", S.news(i, 3, ts0=S.T0 - 90 * 86400), "plain")])
+            p, _ = P.group(installs, None, P.default_exclude())
+            self.assertEqual(p[0]["first_upload"], S.T0)
+            self.assertAlmostEqual(P.account_age_days(p[0]), (S.T0 - int(PID[:8], 16)) / 86400, delta=0.01)
+
     def test_account_month_redacted(self):
         with tempfile.TemporaryDirectory() as d:
             i = "WEIb_ident_0123456789abcdef"
@@ -106,6 +121,37 @@ class GroupTests(unittest.TestCase):
             self.assertEqual(len(parts), 1)
             self.assertTrue(parts[0]["duplicate_enrolment"])
             self.assertEqual(parts[0]["prefixes"], {"WEIb", "WEIx"})
+
+    def test_duplicate_enrolment_only_within_one_study(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b = "WEIb_" + PID + "1230", "AIMECcplc_" + PID + "1231"
+            installs = self._folder(d, [(a, "pdk-system-status", "2026-09-14", [S.status(a)], "plain"),
+                                        (b, "pdk-system-status", "2026-09-14", [S.status(b)], "plain")])
+            parts, _ = P.group(installs, None, P.default_exclude())
+            self.assertFalse(parts[0]["duplicate_enrolment"])
+
+    def test_hidden_prefix_is_not_a_duplicate_enrolment(self):
+        """The redactor blanks a rare cohort prefix; an Edge twin with a blank label is not a second enrolment."""
+        with tempfile.TemporaryDirectory() as d:
+            up, lo, pid = "ident_" + "1" * 16, "ident_" + "2" * 16, "pid_" + "a" * 16
+            Path(d, "identifiers.csv").write_text("ident,prefix,pid,pid_created,install\n"
+                                                  f"{up},AIMECcplc,{pid},2024-03,{up}\n{lo},,{pid},2024-03,{lo}\n")
+            installs = {}
+            for k in (up, lo):
+                installs[k] = new_install(k); installs[k]["status"] = [S.mk_status()]
+            parts, _ = P.group(installs, Path(d, "identifiers.csv"), P.default_exclude())
+            self.assertFalse(parts[0]["duplicate_enrolment"])
+            self.assertTrue(parts[0]["prefix_hidden"])
+
+    def test_dedupe_within_one_install_keeps_synced_reading(self):
+        inst = new_install("WEIb_" + PID + "1230")
+        inst["visits"] = [S.mk_visit("https://x.example/", ts=S.T0, is_local=True, visit_id=1),
+                          S.mk_visit("https://x.example/", ts=S.T0, is_local=False, visit_id=2)]
+        inst["status"] = [S.mk_status()]
+        other = new_install("WEIx_" + PID + "1231"); other["status"] = [S.mk_status()]
+        parts, _ = P.group({inst["ident"]: inst, other["ident"]: other}, None, [])
+        visits = [v for i in parts[0]["installs"] for v in i["visits"]]
+        self.assertEqual([v.is_local for v in visits], [False])
 
 
 if __name__ == "__main__":

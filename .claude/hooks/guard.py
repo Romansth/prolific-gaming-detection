@@ -10,8 +10,10 @@ key folder raw-data/.redaction/), so two things are refused:
    Recursive reads must be scoped to a folder: data-redacted/, reports/, fraudscreen/, privacy/,
    tests/, tools/, docs/ or .claude/.
 
-Exit 2 blocks the call and the message on stderr tells Claude what to do instead; exit 0 lets it
+Exit 2 blocks the call and the message on stderr tells the agent what to do instead; exit 0 lets it
 through. Only accidental reach is in scope; obfuscated commands are a policy matter, not a hook's.
+Claude Code runs it from .claude/settings.json, Codex from .codex/hooks.json; both send the same
+payload fields (tool_name, tool_input, cwd), and Codex reports shell calls as tool_name "Bash".
 """
 import json
 import os
@@ -20,7 +22,7 @@ import shlex
 import sys
 
 PRIVATE = re.compile(r"raw-data|reports-team|\.redaction|user_data_raw", re.I)
-ALLOWED_ROOTS = ("data-redacted", "reports", "fraudscreen", "privacy", "tests", "tools", "docs", ".claude",
+ALLOWED_ROOTS = ("data-redacted", "reports", "fraudscreen", "privacy", "tests", "tools", "docs", ".claude", ".codex",
                  ".superpowers", ".git", ".venv")
 RECURSIVE = {"find", "rg", "tree", "du", "fd", "ag", "ack", "locate", "mdfind", "ugrep"}
 READERS = {"cat", "head", "tail", "less", "more", "wc", "cp", "mv", "zip", "tar", "unzip", "sort", "uniq", "cut",

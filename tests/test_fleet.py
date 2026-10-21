@@ -20,15 +20,26 @@ def heavy(pid, n, infra=False, night=False, status=True):
 class FleetTests(unittest.TestCase):
     def test_percentiles_use_min_visits(self):
         big = heavy(A, 100, night=True)
+        big2 = heavy(C, 100, night=True)
         small = heavy(B, 10, night=True)
-        quiet = [heavy("%024x" % (0x650000000000000000000000 + i), 100) for i in range(5)]
-        f = build_fleet([big, small] + quiet, min_visits=50)
-        self.assertEqual(f.n_screened, 7)
-        self.assertEqual(f.n_in_percentiles, 6)
+        quiet = [heavy("%024x" % (0x650000000000000000000000 + i), 100) for i in range(18)]
+        f = build_fleet([big, big2, small] + quiet, min_visits=50)   # 20 in the percentile set, the small one out
+        self.assertEqual(f.n_screened, 21)
+        self.assertEqual(f.n_in_percentiles, 20)
         self.assertAlmostEqual(night_share(big, "America/New_York"), 1.0)
         self.assertAlmostEqual(night_share(quiet[0], "America/New_York"), 0.0)
         self.assertGreater(f.night_p95, 0.5)
         self.assertEqual(infra_share(heavy(C, 60, infra=True)), 1.0)
+
+    def test_percentiles_need_twenty_participants(self):
+        """With 11 or fewer participants the 95th percentile is the maximum, so the participant who
+        sets it could never exceed it; below 20 the floor alone is the threshold."""
+        owl = heavy(A, 100, night=True)
+        quiet = [heavy("%024x" % (0x650000000000000000000000 + i), 100) for i in range(10)]
+        f = build_fleet([owl] + quiet, min_visits=50)
+        self.assertEqual((f.night_p95, f.percentiles_valid), (0.0, False))
+        more = [heavy("%024x" % (0x660000000000000000000000 + i), 100) for i in range(19)]
+        self.assertTrue(build_fleet([owl] + more, min_visits=50).percentiles_valid)
 
     def test_enrolled_ids_and_owners(self):
         pa = S.mk_participant(A, visits=[S.mk_visit(f"https://x.example/s?PROLIFIC_PID={C}", ts=T)], status=[S.mk_status(disks=(("disk-" + A[:4], 256005632000),))])

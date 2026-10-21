@@ -8,9 +8,9 @@ from pathlib import Path
 
 from fraudscreen import __version__
 from fraudscreen.arms import load_arms, participant_arm
-from fraudscreen.files import list_inputs, parse_name
+from fraudscreen.files import discover, list_inputs, parse_name
 from fraudscreen.fleet import build_fleet
-from fraudscreen.participants import default_exclude, group
+from fraudscreen.participants import _PIDTOKEN_RE, _RAW_RE, _TOKEN_RE, default_exclude, group
 from fraudscreen.report import render_markdown, write_csv
 from fraudscreen.scan import scan_folder
 from fraudscreen.scrub import scrub_file
@@ -24,13 +24,18 @@ import re
 
 
 def detect_mode(folder):
-    """'redacted' when identifiers.csv sits in the folder or identifiers carry tokens."""
-    if (folder / "identifiers.csv").exists() or (folder.parent / "identifiers.csv").exists():
-        return "redacted"
-    for inp in list_inputs(folder)[:200]:
+    """'raw' when any file name carries a real 24-hex id, whatever sits beside it (a stray
+    identifiers.csv must not send a real-id report to reports/); 'redacted' when the names carry
+    tokens; the csv only decides for a folder whose names say nothing."""
+    tokens = False
+    for inp in list_inputs(folder):   # every name: one raw file among hundreds of token files still makes it raw
         fn = parse_name(inp.name)
-        if fn and ("ident_" in fn.ident or "pid_" in fn.ident):
-            return "redacted"
+        if fn and _RAW_RE.match(fn.ident):
+            return "raw"
+        if fn and (_PIDTOKEN_RE.match(fn.ident) or _TOKEN_RE.match(fn.ident)):
+            tokens = True
+    if tokens or (folder / "identifiers.csv").exists() or (folder.parent / "identifiers.csv").exists():
+        return "redacted"
     return "raw"
 
 
@@ -51,6 +56,32 @@ except ImportError:  # pragma: no cover
     RAW_FOLDER_NAMES = ("raw-data",)
 
 
+SHARE_DIR = Path(__file__).resolve().parents[1] / "reports"   # this checkout's shareable folder
+
+
+def _in_shareable_folder(path, repo=None):
+    """True when path, which need not exist yet, lies inside a folder real ids must never reach:
+    a reports/ folder (any case) beside a raw or fraudscreen folder, i.e. the repo layout seen from
+    wherever the pull lives; this checkout's reports/ and the detected repo's reports/ by inode,
+    so a symlink target does not slip past either."""
+    full = Path(os.path.abspath(path))
+    for anc in full.parents:
+        if anc.name.lower() == "reports" and any((anc.parent / x).is_dir() for x in (RAW_FOLDER_NAMES[-1], "fraudscreen")):
+            return True
+    existing = full
+    while not existing.exists() and existing.parent != existing:
+        existing = existing.parent
+    targets = [SHARE_DIR] + ([repo / "reports"] if repo else [])
+    for anc in [existing] + list(existing.parents):
+        for t in targets:
+            try:
+                if t.exists() and os.path.samefile(anc, t):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def score_all(participants, fleet, raw_mode):
     ctx = Context(participants=participants, fleet=fleet, raw_mode=raw_mode)
     raw_only = [s.id for s in SIGNS if s.modes == "raw"]
@@ -69,10 +100,12 @@ def score_all(participants, fleet, raw_mode):
 
 
 def refuse_inside_claude(folder):
-    """The raw folder is out of bounds for a Claude session; the person runs the screen on it."""
-    if os.environ.get("CLAUDECODE") != "1":
+    """The raw folder is out of bounds for a Claude Code or Codex session; the person runs the screen
+    on it. Claude Code sets CLAUDECODE=1 in its shells, Codex sets CODEX_THREAD_ID and CODEX_SESSION_ID."""
+    if os.environ.get("CLAUDECODE") != "1" and not os.environ.get("CODEX_THREAD_ID") and not os.environ.get("CODEX_SESSION_ID"):
         return False
-    return any(part in RAW_FOLDER_NAMES for part in Path(folder).parts)
+    p = Path(folder)   # the path as given and where it really points, so a symlink is no way around
+    return any(part in RAW_FOLDER_NAMES for part in p.parts + p.resolve().parts)
 
 
 def main(argv=None):
@@ -95,37 +128,49 @@ def main(argv=None):
         print(f"Data folder not found: {args.data}")
         return 2
     if refuse_inside_claude(folder):
-        print("Refusing to screen a raw-data folder inside a Claude session: run this command in your own "
-              "terminal. Claude works from data-redacted/ and reports/.")
+        print("Refusing to screen a raw-data folder inside a Claude Code or Codex session: run this command in your own "
+              "terminal. The agent works from data-redacted/ and reports/.")
         return 2
     repo, kind = repo_layout(folder)
     today = dt.date.today().isoformat()
     mode = detect_mode(folder)
     raw_mode = mode == "raw"
+    if repo and raw_mode and kind == "redacted":
+        print(f"Refusing: raw export files found under data-redacted/{folder.name}; move the pull to "
+              f"{RAW_FOLDER_NAMES[-1]}/{folder.name} and run again.")
+        return 2
     exclude = [re.compile(p, re.I) for p in args.exclude_pattern] if args.exclude_pattern else default_exclude()
-    installs = scan_folder(folder, args.workers, raw_mode)
+    inputs, skipped_files = discover(folder)
+    installs = scan_folder(folder, args.workers, raw_mode, inputs=inputs)
     ids_csv = folder / "identifiers.csv"
     if not ids_csv.exists():
         ids_csv = folder.parent / "identifiers.csv" if (folder.parent / "identifiers.csv").exists() else None
     participants, skipped = group(installs, ids_csv, exclude)
     n_visits = sum(len(i["visits"]) for p in participants for i in p["installs"])
+    not_read = ", ".join(f"{k} {v}" for k, v in sorted(skipped_files.items())) or "none"
     if not participants or n_visits == 0:
-        print(f"Nothing screenable: {len(installs)} installs, skipped {dict(skipped)}, history points {n_visits}.")
+        print(f"Nothing screenable: {len(installs)} installs, skipped {dict(skipped)}, history points {n_visits}, "
+              f"files not read: {not_read}.")
         return 3
     arms = load_arms(args.arms)
     for p in participants:
         p["arm"] = participant_arm(p, arms)
-    fleet = build_fleet(participants, args.min_visits)
+    fleet = build_fleet(participants, args.min_visits, raw_mode)
     results = score_all(participants, fleet, raw_mode)
     days = sorted({parse_name(f).day for p in participants for i in p["installs"] for f in i["files"] if parse_name(f)})
-    meta = dict(folder=str(folder), mode=mode, files=sum(len(i["files"]) for p in participants for i in p["installs"]),
+    meta = dict(folder=folder.name, mode=mode, files=sum(len(i["files"]) for p in participants for i in p["installs"]),
                 installs=sum(len(p["installs"]) for p in participants), participants=len(participants), skipped=dict(skipped),
-                unreadable=sum(i["unreadable"] for i in installs.values()),
+                unreadable=sum(i["unreadable"] for i in installs.values()), skipped_files=dict(skipped_files),
+                no_time=sum(i.get("no_time", 0) for i in installs.values()),
                 date_range=f"{days[0]}..{days[-1]}" if days else "", version=__version__, seconds=time.time() - t_start,
                 arms_available=bool(arms))
     # where the first (unscrubbed) report goes: a raw screen carries real ids and belongs with the team
+    pub = None
     if args.out:
         out = Path(args.out)
+        if args.redact and raw_mode and not repo:
+            # the name given is the shareable report; the real-id one goes beside it
+            pub, out = out, out.with_name(out.stem + "_team" + out.suffix)
     elif repo and raw_mode:
         out = repo / "reports-team" / f"{folder.name}_screen_{today}.md"
     elif repo:
@@ -135,6 +180,10 @@ def main(argv=None):
         out = folder.parent / f"{folder.name}_screen_{today}{'_team' if args.redact else ''}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     csv_path = Path(args.csv) if args.csv else out.with_suffix(".csv")
+    if raw_mode and any(_in_shareable_folder(x, repo) for x in (out, csv_path)):
+        print("Refusing: a raw screen cannot write its report or CSV under reports/ (they carry real ids); "
+              "drop --out/--csv or point them elsewhere.")
+        return 2
     out.write_text(render_markdown(results, participants, fleet, meta), encoding="utf-8")
     write_csv(csv_path, results, participants)
     listed = sum(1 for p in participants if any(r.fired for r in results[p["key"]].values()))
@@ -163,7 +212,7 @@ def main(argv=None):
         print(f"Redactor exited {rc}; the team report stands, no scrubbed report written.")
         return 2
     host_counts, prefix_counts, device_ids = _counts_for_scrub(participants, installs)
-    pub = (repo / "reports" / out.name) if repo else out.with_name(out.name.replace("_team", ""))
+    pub = pub or ((repo / "reports" / out.name) if repo else out.with_name(out.name.replace("_team", "")))
     kw = dict(host_counts=host_counts, prefix_counts=prefix_counts, device_ids=device_ids)
     scrub_file(out, pub, key_dir, **kw)
     scrub_file(csv_path, pub.with_suffix(".csv"), key_dir, **kw)
@@ -183,13 +232,15 @@ def _counts_for_scrub(participants, installs):
             for v in inst["visits"]:
                 hosts.setdefault(v.host, set()).add(p["key"])
             for st in inst["status"]:
-                devices.update(d for d, _ in st.disks)
-                devices.update(d for d, _, _, _ in st.displays)
+                devices.update(d for d, _ in st.disks if len(d) >= 6)
+                devices.update(d for d, _, _, _ in st.displays if len(d) >= 6)
+    # count prefixes exactly as the redactor's census does, so the scrub hides the same ones
+    from privacy.idscan import IDENT_RE, ident_parts
     prefixes = Counter()
     for ident in installs:
-        m = re.match(r"^([A-Za-z]+_)", ident)
+        m = IDENT_RE.match(ident)
         if m:
-            prefixes[m.group(1).lower()] += 1
+            prefixes[ident_parts(m)[0].lower()] += 1
     return {h: len(s) for h, s in hosts.items()}, dict(prefixes), devices
 
 if __name__ == "__main__":

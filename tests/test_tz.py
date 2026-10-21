@@ -16,6 +16,12 @@ class TzTests(unittest.TestCase):
     def tearDown(self):
         tz.USE_ZONEINFO = self._saved
 
+    def test_posix_and_odd_us_names_and_case(self):
+        """TZ=EST5EDT on a Linux box, legacy aliases, and a lower-cased name are all US clocks."""
+        for z in ("EST5EDT", "PST8PDT", "HST", "America/Knox_IN", "Navajo", "Pacific/Midway", "america/new_york"):
+            self.assertTrue(tz.is_us_zone(z), z)
+        self.assertAlmostEqual(tz.offset_hours("EST5EDT", ts(2026, 9, 14, 0)), -4)   # September: DST
+
     def test_us_zone_set(self):
         for z in ("America/New_York", "America/Indiana/Indianapolis", "US/Eastern", "Pacific/Honolulu",
                   "Etc/GMT+6", "America/Puerto_Rico", "America/Kentucky/Louisville"):

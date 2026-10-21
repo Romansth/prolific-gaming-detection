@@ -26,6 +26,43 @@ class ScanTests(unittest.TestCase):
             self.assertIsNone(vis.is_local)
             self.assertEqual((vis.tz, vis.bundle, vis.file), ("America/New_York", 77, p.name))
 
+    def test_visit_without_time_is_counted_not_dated(self):
+        """A visit with no usable visit_time used to be dated 1969 and feed M4/M5 day counts."""
+        with tempfile.TemporaryDirectory() as d:
+            v = S.visit(IDENT, "https://a.example/", 1); del v["visit_time"]
+            w = S.visit(IDENT, "https://b.example/", 2); w["visit_time"] = "soon"
+            p = S.write_file(d, IDENT, "rex-history-visit", "2026-09-14", [v, w, S.visit(IDENT, "https://c.example/", 3)])
+            inst = scan_one(Input(p, None), True)[1]
+            self.assertEqual((len(inst["visits"]), inst["no_time"]), (1, 2))
+            self.assertAlmostEqual(inst["visits"][0].obs_s, S.T0)
+
+    def test_non_finite_or_zero_metadata_timestamp_is_ignored(self):
+        """NaN in a record's timestamp used to reach the zone count and crash the run; 0 is 1970."""
+        with tempfile.TemporaryDirectory() as d:
+            v = S.visit(IDENT, "https://a.example/", 1); v["passive-data-metadata"]["timestamp"] = float("nan")
+            w = S.visit(IDENT, "https://b.example/", 2); w["passive-data-metadata"]["timestamp"] = 0
+            p = S.write_file(d, IDENT, "rex-history-visit", "2026-09-14", [v, w])
+            self.assertEqual([x.obs_s for x in scan_one(Input(p, None), True)[1]["visits"]], [S.T0, S.T0])
+            st = S.status(IDENT); st["passive-data-metadata"]["timestamp"] = float("nan")
+            p = S.write_file(d, IDENT, "pdk-system-status", "2026-09-14", [st])
+            self.assertEqual(scan_one(Input(p, None), True)[1]["status"], [])
+
+    def test_infinite_numbers_do_not_crash(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = S.status(IDENT); st["memory-info"]["capacity"] = float("inf"); st["cpu-info"]["numOfProcessors"] = float("nan")
+            p = S.write_file(d, IDENT, "pdk-system-status", "2026-09-14", [st])
+            s = scan_one(Input(p, None), True)[1]["status"][0]
+            self.assertEqual((s.mem, s.nproc), (-1, -1))
+
+    def test_is_local_strings_ints_and_removable_disks(self):
+        with tempfile.TemporaryDirectory() as d:
+            vs = [S.visit(IDENT, "https://a.example/", i, is_local=x) for i, x in enumerate(("false", "TRUE", 0, 1, "maybe"))]
+            p = S.write_file(d, IDENT, "rex-history-visit", "2026-09-14", vs)
+            self.assertEqual([v.is_local for v in scan_one(Input(p, None), True)[1]["visits"]], [False, True, False, True, None])
+            st = S.status(IDENT); st["storage-info"].append({"id": "usb-1", "name": "USB", "type": "removable", "capacity": 31000000000})
+            p = S.write_file(d, IDENT, "pdk-system-status", "2026-09-14", [st])
+            self.assertEqual(scan_one(Input(p, None), True)[1]["status"][0].removable, frozenset({"usb-1"}))
+
     def test_status_fields(self):
         with tempfile.TemporaryDirectory() as d:
             st = S.status(IDENT, disks=(("b", 1000202039296), ("a", 250057060352), ("usb", 1000)),

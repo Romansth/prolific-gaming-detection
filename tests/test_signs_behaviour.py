@@ -86,6 +86,9 @@ class BehaviourTests(unittest.TestCase):
         self.assertTrue(r["m12"].fired)
         self.assertEqual(r["m12"].linked, [B])
         self.assertNotIn("someone", str(r["m12"].evidence))
+        # no unkeyed hash of the address: anyone holding a guessed address could confirm it
+        self.assertNotIn(h[:8], r["m12"].evidence[0].what)
+        self.assertIn("email identity #1 also under", r["m12"].evidence[0].what)
         red = run(pa, fleet, raw=False, others=[pb])
         self.assertFalse(red["m12"].available)
 

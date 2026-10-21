@@ -1,5 +1,6 @@
 """Parallel scan of export files into compact per-install records."""
 import hashlib
+import math
 import re
 from multiprocessing import Pool
 from pathlib import Path
@@ -36,8 +37,19 @@ def title_language(title):
 def _int(x, default=-1):
     try:
         return int(float(x))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: Infinity in a numeric field
         return default
+
+
+def _bool(x):
+    """is_local as the export stores it: a JSON boolean, else 0/1 or 'true'/'false'; None otherwise."""
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, int) and x in (0, 1):
+        return bool(x)
+    if isinstance(x, str):
+        return {"true": True, "false": False}.get(x.strip().lower())
+    return None
 
 
 def _ua_fields(gen_string):
@@ -83,7 +95,8 @@ def scan_one(inp, raw_mode):
         tz = md.get("timezone")
         tz = tz if isinstance(tz, str) else ""
         ts = md.get("timestamp")
-        ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else None
+        # a finite, positive number only: NaN would crash the zone count, 0 is 1970
+        ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts) and ts > 0 else None
         ch = md.get("configuration-hash")
         ch = ch[:8] if isinstance(ch, str) else ""
         if ch:
@@ -96,12 +109,15 @@ def scan_one(inp, raw_mode):
                 parts = urlsplit(url)
             except ValueError:
                 continue
-            loc = p.get("is_local")
+            t_ms = _int(p.get("visit_time"))
+            if t_ms <= 0:   # no usable time: the row would otherwise be dated 1969 and count as a day
+                inst["no_time"] += 1
+                continue
             inst["visits"].append(Visit(
-                _int(p.get("visit_time")), (parts.hostname or "").lower(), parts.path, parts.query,
+                t_ms, (parts.hostname or "").lower(), parts.path, parts.query,
                 str(p.get("transition_type") or ""), _int(p.get("visit_id")), _int(p.get("history_item_id")),
-                _int(p.get("visit_count")), (loc if isinstance(loc, bool) else None), tz, _bundle(p), inp.name,
-                str(md.get("source") or "")))
+                _int(p.get("visit_count")), _bool(p.get("is_local")), tz, _bundle(p), inp.name,
+                str(md.get("source") or ""), ts if ts is not None else t_ms / 1000))
             if raw_mode:
                 ident = _mail_identity(p.get("title"))
                 if ident and ident not in inst["mail_identities"]:
@@ -116,14 +132,15 @@ def scan_one(inp, raw_mode):
                 continue
             cpu = _dict(p.get("cpu-info"))
             mem = _dict(p.get("memory-info"))
-            disks = tuple(sorted((str(s.get("id")), _int(s.get("capacity")))
-                                 for s in _list(p.get("storage-info")) if isinstance(s, dict)))
+            storage = [s for s in _list(p.get("storage-info")) if isinstance(s, dict)]
+            disks = tuple(sorted((str(s.get("id")), _int(s.get("capacity"))) for s in storage))
+            removable = frozenset(str(s.get("id")) for s in storage if s.get("type") == "removable")
             displays = tuple((str(d.get("id")), _int(_dict(d.get("bounds")).get("width")),
                               _int(_dict(d.get("bounds")).get("height")), str(d.get("name") or ""))
                              for d in _list(p.get("display-info")) if isinstance(d, dict))
             inst["status"].append(Status(ts, tz, str(cpu.get("modelName") or "").strip(), _int(cpu.get("numOfProcessors")),
                                          str(cpu.get("archName") or ""), _int(mem.get("capacity")), disks, displays,
-                                         plat, browser, ver, _bundle(p), inp.name))
+                                         plat, browser, ver, _bundle(p), inp.name, removable))
         elif gen == "pdk-app-event":
             name = p.get("event_name")
             if ts is not None and name in HISTORY_EVENTS:
@@ -145,9 +162,10 @@ def _job(args):
     return scan_one(inp, raw_mode)
 
 
-def scan_folder(root, workers, raw_mode):
-    """dict ident -> Install, identifiers exactly as in the file names."""
-    inputs = list_inputs(Path(root))
+def scan_folder(root, workers, raw_mode, inputs=None):
+    """dict ident -> Install, identifiers exactly as in the file names. `inputs` lets the caller
+    pass the discovered list so the tree is walked once."""
+    inputs = list_inputs(Path(root)) if inputs is None else list(inputs)
     inputs.sort(key=lambda i: -(i.path.stat().st_size if i.member is None else 0))
     installs = {}
     jobs = [(i, raw_mode) for i in inputs]

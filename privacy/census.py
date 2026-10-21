@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from privacy import leakcheck
 from privacy.files import kind_of, zip_is_duplicate
-from privacy.idscan import IDENT_RE, candidate_ids, ident_parts
+from privacy.idscan import HEX24_RE, IDENT_RE, candidate_ids, ident_parts
 from privacy.urls import URL_IN_TEXT_RE
 
 _DOMAIN_RE = re.compile(r'"domain"\s*:\s*"([^"\\]+)"')
@@ -58,7 +58,10 @@ def _census_text(text, name):
         src = _SOURCE_RE.search(text)
         owner = src.group(1) if src else None
     if owner:
-        owner = owner.lower()   # case variants of one identifier are one participant
+        # one participant per Prolific id: the Chrome and Edge identifiers of one person, and the
+        # case variants of one identifier, must not count twice towards the host threshold
+        inner = HEX24_RE.search(owner)
+        owner = inner.group(0).lower() if inner else owner.lower()
     hosts = set()
     for m in URL_IN_TEXT_RE.finditer(text):
         try:

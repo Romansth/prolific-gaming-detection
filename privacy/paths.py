@@ -12,10 +12,15 @@ RAW_FOLDER_NAME = DEFAULT_RAW.name   # the guard keys on this folder name, where
 RAW_FOLDER_NAMES = (RAW_FOLDER_NAME, "raw-data")   # ... and on the screening repo's raw folder
 
 
+# Claude Code sets CLAUDECODE=1 for every shell it starts; Codex injects CODEX_THREAD_ID and
+# CODEX_SESSION_ID, even under an include_only shell_environment_policy. A person's Terminal sets
+# none of them, so these tell the two apart.
+AGENT_ENV_VARS = ("CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SESSION_ID")
+
+
 def inside_claude():
-    # Claude Code sets CLAUDECODE=1 for every shell it starts; a person's
-    # Terminal does not, so this tells the two apart.
-    return os.environ.get("CLAUDECODE") == "1"
+    """True inside a Claude Code or Codex session (the name predates Codex support)."""
+    return os.environ.get("CLAUDECODE") == "1" or any(os.environ.get(v) for v in AGENT_ENV_VARS[1:])
 
 
 def in_raw_folder(path):

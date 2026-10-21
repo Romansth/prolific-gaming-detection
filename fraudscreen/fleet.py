@@ -17,6 +17,10 @@ class Fleet:
     mail_identities: dict = field(default_factory=dict)
     n_screened: int = 0
     n_in_percentiles: int = 0
+    percentiles_valid: bool = False   # False below PERCENTILE_MIN_N: the floors alone apply
+
+
+PERCENTILE_MIN_N = 20
 
 
 def local_visits(p):
@@ -48,42 +52,46 @@ def infra_share(p):
 
 
 def _p95(values):
-    if not values:
+    """The 95th percentile, or 0.0 for fewer than PERCENTILE_MIN_N values: with 11 or fewer the
+    percentile is the maximum, which the participant who sets it can never exceed, so the callers'
+    max(p95, floor) falls back to the floor."""
+    if len(values) < PERCENTILE_MIN_N:
         return 0.0
     s = sorted(values)
     return s[min(len(s) - 1, int(round(0.95 * (len(s) - 1))))]
 
 
-def build_fleet(participants, min_visits):
+def build_fleet(participants, min_visits, raw_mode=True):
     from fraudscreen.signs.accounts import foreign_id_visits
     from fraudscreen.signs.behaviour import chat_share
     from fraudscreen.signs.machine import hw_key
     f = Fleet(n_screened=len(participants))
+    keys = {p["key"] for p in participants}
     nights, infras, chats = [], [], []
     for p in participants:
         key = p["key"]
         f.enrolled_ids.add(key)
-        for v, pid in foreign_id_visits(p):
+        # the same filter the per-participant scan applies, so m3 links both sides of a pair
+        for v, pid in foreign_id_visits(p, enrolled=keys, raw_mode=raw_mode):
             f.foreign_id_owners.setdefault(pid, set()).add(key)
-        spans = {}
+        times = {}
         for inst in p["installs"]:
             for s in inst["status"]:
                 k = hw_key(s)
                 if k:
                     f.hw_keys.setdefault(k, set()).add(key)
                 for tid in [d for d, _ in s.disks] + [d for d, _, _, _ in s.displays]:
-                    if len(tid) < 6:
-                        continue
-                    lo, hi, n = spans.get(tid, (s.ts, s.ts, 0))
-                    spans[tid] = (min(lo, s.ts), max(hi, s.ts), n + 1)
+                    if len(tid) >= 6:   # "1" or "" is no id; the redactor leaves such values untokenized
+                        times.setdefault(tid, []).append(s.ts)
             for ident in inst["mail_identities"]:
                 f.mail_identities.setdefault(ident, set()).add(key)
-        for tid, (lo, hi, n) in spans.items():
-            f.transient_ids.setdefault(tid, []).append((key, lo, hi, n))
+        for tid, ts in times.items():
+            f.transient_ids.setdefault(tid, []).append((key, sorted(ts)))
         if len(local_visits(p)) >= min_visits:
             f.n_in_percentiles += 1
             nights.append(night_share(p, reported_zone(p)))
             infras.append(infra_share(p))
             chats.append(chat_share(p))
     f.night_p95, f.infra_p95, f.chat_p95 = _p95(nights), _p95(infras), _p95(chats)
+    f.percentiles_valid = f.n_in_percentiles >= PERCENTILE_MIN_N
     return f

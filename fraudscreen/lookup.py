@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from privacy import tokens
-from privacy.idscan import IDENT_RE, IdScanner, ident_parts
+from privacy.idscan import IDENT_RE, ident_parts
 
 HEX24 = re.compile(r"^[0-9a-fA-F]{24}$")
 
@@ -48,9 +48,10 @@ def main(argv=None):
     if "@" in value:
         print(tok.token("email", value.lower()))
         return 0
-    scanner = IdScanner(tok, known_hex=set(), prefix_counts={}, threshold=1)
-    print(scanner.scan(value))
-    return 0
+    # anything else (a device id, a host, a mistyped id) has no token to offer; echoing the input
+    # back would put a possibly real value on the screen for nothing
+    print("No token: not a Prolific id, identifier or e-mail address.", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

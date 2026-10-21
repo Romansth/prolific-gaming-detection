@@ -38,8 +38,8 @@ class CensusTests(unittest.TestCase):
         p = self.put(f"{IDENT_A}__rex-history-visit__2099-01-01.json",
                      visits(IDENT_A, f"https://common.example/a?PROLIFIC_PID%3d{PID_B}"))
         c = census.census_file(p)
-        self.assertEqual(c["owners_hosts"], {IDENT_A.lower(): {"common.example"}})
-        self.assertEqual(c["owners_domains"], {IDENT_A.lower(): {"common.example"}})
+        self.assertEqual(c["owners_hosts"], {PID_A: {"common.example"}})   # owners are Prolific ids
+        self.assertEqual(c["owners_domains"], {PID_A: {"common.example"}})
         self.assertIn(PID_B, c["known"])
         self.assertIn(PID_B.encode(), c["leak"])
         self.assertIn(IDENT_A, c["idents"])
@@ -48,7 +48,7 @@ class CensusTests(unittest.TestCase):
         z = self.tmp / "nightly.zip"
         with zipfile.ZipFile(z, "w") as f:
             f.writestr(f"{IDENT_B}__rex-history-visit__2099-01-01.json", visits(IDENT_B, "https://common.example/b"))
-        self.assertEqual(census.census_file(z)["owners_hosts"], {IDENT_B.lower(): {"common.example"}})
+        self.assertEqual(census.census_file(z)["owners_hosts"], {PID_B: {"common.example"}})
 
     def test_merge_counts_distinct_owners(self):
         a = census.census_file(self.put("a.json", visits(IDENT_A, "https://common.example/a", "https://rare.example/")))

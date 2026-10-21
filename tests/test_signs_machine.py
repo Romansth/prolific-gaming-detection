@@ -12,15 +12,16 @@ T = S.T0
 def fleet_for(*parts):
     f = Fleet(enrolled_ids={p["key"] for p in parts})
     for p in parts:
+        times = {}
         for inst in p["installs"]:
             for s in inst["status"]:
                 k = hw_key(s)
                 if k:
                     f.hw_keys.setdefault(k, set()).add(p["key"])
-                for did, _cap in s.disks:
-                    f.transient_ids.setdefault(did, []).append((p["key"], s.ts, s.ts, 1))
-                for did, _w, _h, _n in s.displays:
-                    f.transient_ids.setdefault(did, []).append((p["key"], s.ts, s.ts, 1))
+                for did in [d for d, _ in s.disks] + [d for d, _, _, _ in s.displays]:
+                    times.setdefault(did, []).append(s.ts)
+        for did, ts in times.items():
+            f.transient_ids.setdefault(did, []).append((p["key"], sorted(ts)))
     return f
 
 
@@ -39,6 +40,29 @@ class MachineTests(unittest.TestCase):
         self.assertTrue(r["M2"].fired)
         self.assertEqual(r["M2"].linked, [B])
         self.assertIn("bf5b9a96", r["M2"].evidence[0].what)
+
+    def test_m1_skips_status_without_hardware_fields(self):
+        """Every Windows record with no cpu, memory or processor count shares one empty key."""
+        self.assertIsNone(hw_key(S.mk_status(cpu="", nproc=-1, mem=-1)))
+        self.assertIsNone(hw_key(S.mk_status(mem=0)))
+
+    def test_m1_ignores_removable_disks(self):
+        s = S.mk_status(disks=(("fixed-1", 256005632000), ("usb", 31000000000)))._replace(removable=frozenset({"usb"}))
+        self.assertEqual(hw_key(s), hw_key(S.mk_status(disks=(("fixed-1", 256005632000),))))
+
+    def test_m2_needs_the_same_minute_not_the_same_range(self):
+        """An id seen on day 0 and day 10 by A and on day 5 by B never appears in one running browser."""
+        pa = S.mk_participant(A, status=[S.mk_status(ts=T, disks=(("same-id-xx", 1),)), S.mk_status(ts=T + 10 * 86400, disks=(("same-id-xx", 1),))])
+        pb = S.mk_participant(B, status=[S.mk_status(ts=T + 5 * 86400, disks=(("same-id-xx", 1),))])
+        self.assertFalse(score_machine(pa, Context([pa, pb], fleet_for(pa, pb), True))["M2"].fired)
+        pc = S.mk_participant(B, status=[S.mk_status(ts=T + 30, disks=(("same-id-xx", 1),))])
+        self.assertTrue(score_machine(pa, Context([pa, pc], fleet_for(pa, pc), True))["M2"].fired)
+
+    def test_m5_ignores_unknown_display_size(self):
+        st = [S.mk_status(ts=T + i, displays=(("d", -1, -1, "Generic PnP Monitor"),)) for i in range(5)]
+        st += [S.mk_status(ts=T + 10 + i, displays=(("e", 1000 + i, 700, "Generic PnP Monitor"),)) for i in range(4)]
+        p = S.mk_participant(A, status=st)
+        self.assertFalse(score_machine(p, Context([p], fleet_for(p), True))["m5"].fired)
 
     def test_m2_not_when_spans_disjoint(self):
         pa = S.mk_participant(A, status=[S.mk_status(ts=T, disks=(("same-id", 1),))])

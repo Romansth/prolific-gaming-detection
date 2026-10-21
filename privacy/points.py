@@ -52,9 +52,9 @@ class PointRedactor:
         if rule is None:
             self._count(self.dropped, gen, path)
             return _GONE
-        return self._leaf(rule, value)
+        return self._leaf(rule, value, path)
 
-    def _leaf(self, rule, value):
+    def _leaf(self, rule, value, path=()):
         if not isinstance(value, str):
             return value  # numbers, booleans and null carry no identifiers
         if rule == R.KEEP:
@@ -64,6 +64,10 @@ class PointRedactor:
         if rule == R.DOMAIN:
             return self.urls.domain(value)
         if rule == R.DEV:
+            # an id of "1" or "" identifies nothing and is left readable so the screen's short-id
+            # filter sees it; a name (a volume label such as "JANE") is always tokenized
+            if len(value) < 6 and path[-1:] != ("name",):
+                return value
             return self.scanner.tok.token("dev", value)
         if rule == R.Q:
             return self.scanner.tok.token("q", value) if value else value

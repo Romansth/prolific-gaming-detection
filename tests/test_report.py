@@ -44,7 +44,7 @@ class ReportTests(unittest.TestCase):
         md = render_markdown(self.results, [self.pa, self.pb, self.pc], self.fleet, META)
         rows = [l for l in md.splitlines() if l.startswith("| ") and ("(WEIb)" in l or "(AIMEC" in l)]
         self.assertEqual(len(rows), 2)
-        self.assertIn(B + " (AIMECcplc/eplc)", rows[0])
+        self.assertIn(B + " (AIMECcplc/AIMECeplc)", rows[0])
         self.assertIn(A + " (WEIb)", rows[1])
         self.assertNotIn(C, md)
         self.assertIn("| 2 |", rows[0])
@@ -60,7 +60,7 @@ class ReportTests(unittest.TestCase):
 
     def test_evidence_block_format(self):
         md = render_markdown(self.results, [self.pa, self.pb, self.pc], self.fleet, META)
-        self.assertIn("### " + B + " (AIMECcplc/eplc)", md)
+        self.assertIn("### " + B + " (AIMECcplc/AIMECeplc)", md)
         self.assertIn("**M2 Two enrolled participants in one running browser**", md)
         self.assertIn("Rule: ", md)
         self.assertIn("- 2026-09-14 00:23:15Z · https://x.example/p · f.json", md)
@@ -79,7 +79,7 @@ class ReportTests(unittest.TestCase):
             write_csv(path, self.results, [self.pa, self.pb, self.pc])
             rows = list(csv.DictReader(open(path, newline="")))
             self.assertEqual(len(rows), 3)
-            self.assertEqual(rows[0]["participant"], B + " (AIMECcplc/eplc)")
+            self.assertEqual(rows[0]["participant"], B + " (AIMECcplc/AIMECeplc)")
             self.assertEqual(rows[0]["major_count"], "2")
             self.assertEqual(rows[0]["M1_fired"], "1")
             self.assertEqual(rows[1]["m4_count"], "3")

@@ -34,13 +34,17 @@ def scrub_text(text, key_dir, host_counts=None, prefix_counts=None, threshold=5,
     scanner = IdScanner(tok, known_hex=known, prefix_counts=prefix_counts, threshold=threshold)
     urls = UrlRule(scanner, host_counts=host_counts, domain_counts=host_counts, threshold=threshold)
     out = Scrubber(scanner, urls).scrub(text)
-    dev = _word_re(device_ids or ())
+    # ids under 6 characters stay readable in the redacted data too (privacy/points.py), and a
+    # whole-word match on "1" or "None" would rewrite ordinary report text
+    dev = _word_re(d for d in (device_ids or ()) if len(d) >= 6)
     if dev:
         out = dev.sub(lambda m: tok.token("dev", m.group(0)), out)
     rare_hosts = _word_re(h for h, n in host_counts.items() if n < threshold and not urls.allowed_host(h))
     if rare_hosts:
         out = rare_hosts.sub(lambda m: urls.host_part(m.group(0).lower()), out)
-    rare_prefixes = _word_re((pfx.rstrip("_") for pfx, n in prefix_counts.items() if n < threshold), re.I)
+    # only prefixes of the study grammar the redactor hides (AIMMS/AIMEC/WEI...); any other word
+    # before an underscore in an identifier is not a cohort prefix and would hit prose ("Prolific")
+    rare_prefixes = _word_re((pfx.rstrip("_") for pfx, n in prefix_counts.items() if n < threshold and _STEM_RE.match(pfx)), re.I)
     if rare_prefixes:
         out = rare_prefixes.sub(lambda m: _stem(m.group(0)), out)
     if tok.added:

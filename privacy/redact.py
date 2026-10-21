@@ -161,7 +161,7 @@ def main(argv=None):
     safe = Path(args.safe) if args.safe else raw.resolve().parent / (raw.resolve().name + "_redacted")
     key_dir = Path(args.key_dir) if args.key_dir else paths.find_key_dir(raw)
     if paths.inside_claude() and paths.in_raw_folder(raw):
-        print("Refusing to run inside a Claude session: this reads the raw folder. "
+        print("Refusing to run inside a Claude Code or Codex session: this reads the raw folder. "
               "Run python3 -m privacy.redact in your own terminal.")
         return 2
     if not raw.is_dir():

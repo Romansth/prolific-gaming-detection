@@ -1,6 +1,7 @@
 """Behaviours pinned by the whole-branch review: the data-boundary guard, scrub coverage, symlinked
 pulls, redacted-mode gaps, link-sharing mutuality, Edge-imported duplicates, scoring speed, scan
 tolerance, header counts, dead checks, missing US zones, e-mail masking."""
+import datetime as dt
 import io
 import json
 import os
@@ -15,11 +16,11 @@ from pathlib import Path
 from unittest import mock
 
 from fraudscreen import hosts, participants as P, tz
-from fraudscreen.__main__ import main, score_all
+from fraudscreen.__main__ import _counts_for_scrub, detect_mode, main, score_all
 from fraudscreen.files import Input, read_points
 from fraudscreen.fleet import Fleet, build_fleet
 from fraudscreen.records import merge_install, new_install
-from fraudscreen.report import render_markdown
+from fraudscreen.report import participant_label, render_markdown
 from fraudscreen.scan import scan_one
 from fraudscreen.scrub import scrub_text
 from fraudscreen.signs import SIGNS, Context, SignResult
@@ -27,6 +28,7 @@ from fraudscreen.signs.accounts import score_accounts
 from fraudscreen.signs.behaviour import score_behaviour
 from fraudscreen.signs.location import score_location
 from fraudscreen.signs.machine import score_machine
+from privacy.paths import AGENT_ENV_VARS, RAW_FOLDER_NAMES
 from tests import synth as S
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,17 +78,147 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(guard("Glob", {"pattern": "**/*.json"})[0], 2)
         self.assertEqual(guard("Glob", {"pattern": "**/*.json", "path": "data-redacted"})[0], 0)
 
+    def test_codex_hook_runs_the_same_guard(self):
+        """.codex/hooks.json finds guard.py from any folder of the repo (no git needed, the dist zip has
+        none) and blocks the same calls, given the payload shape Codex sends."""
+        (group,) = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]["PreToolUse"]
+        for tool in ("Bash", "apply_patch", "view_image"):
+            self.assertRegex(tool, group["matcher"])
+        command = group["hooks"][0]["command"]
+        private = RAW_FOLDER_NAMES[-1]
+        cases = (("Bash", "find . -name '*.json'", 2), ("Bash", "rg pid_ reports/", 0),
+                 ("apply_patch", f"*** Begin Patch\n*** Add File: {private}/x.json\n+{{}}\n*** End Patch", 2),
+                 ("apply_patch", "*** Begin Patch\n*** Add File: tests/x.py\n+pass\n*** End Patch", 0))
+        for cwd in (ROOT, ROOT / "tests"):
+            for tool, cmd, want in cases:
+                payload = {"session_id": "s", "turn_id": "t", "transcript_path": None, "cwd": str(cwd),
+                           "hook_event_name": "PreToolUse", "model": "m", "permission_mode": "default",
+                           "tool_name": tool, "tool_use_id": "u", "tool_input": {"command": cmd}}
+                r = subprocess.run(["sh", "-c", command], input=json.dumps(payload), capture_output=True, text=True, cwd=str(cwd))
+                self.assertEqual(r.returncode, want, f"{cwd.name} {tool} {cmd!r}: {r.stderr}")
+
     def test_screen_refuses_raw_folder_inside_claude(self):
+        self._screen_refuses_raw_folder({"CLAUDECODE": "1"})
+
+    def test_screen_refuses_raw_folder_inside_codex(self):
+        self._screen_refuses_raw_folder({"CODEX_THREAD_ID": "t"})
+
+    def _screen_refuses_raw_folder(self, agent_env):
         with tempfile.TemporaryDirectory() as d:
             pull = Path(d, "raw-data", "oct-10")
             ident = "WEIb_" + A + "1230"
             S.write_file(pull, ident, "pdk-system-status", "2026-09-14", [S.status(ident)])
             buf = io.StringIO()
-            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), redirect_stdout(buf):
+            with mock.patch.dict(os.environ, {**{v: "" for v in AGENT_ENV_VARS}, **agent_env}), redirect_stdout(buf):
                 code = main(["--data", str(pull), "--workers", "1"])
             self.assertEqual(code, 2)
             self.assertIn("Refusing", buf.getvalue())
             self.assertFalse(list(Path(d).rglob("*_screen_*")))
+
+
+class ReportPlacementTests(unittest.TestCase):
+    """A real-id report must never land in the shareable reports/ folder: the mode comes from the
+    file names, a raw screen in the repo layout never writes under reports/, and --out with
+    --redact outside the repo keeps the team report beside the scrubbed one."""
+
+    def _raw_pull(self, pull):
+        ident = "WEIb_" + A + "1230"
+        S.write_file(pull, ident, "rex-history-visit", "2026-09-14", S.news(ident, 5))
+        S.write_file(pull, ident, "pdk-system-status", "2026-09-14", [S.status(ident)])
+        return ident
+
+    def test_stray_identifiers_csv_does_not_make_a_raw_pull_redacted(self):
+        with tempfile.TemporaryDirectory() as d:
+            pull = Path(d, "oct-10"); self._raw_pull(pull)
+            Path(d, "identifiers.csv").write_text("ident,prefix,pid,pid_created,install\n")
+            self.assertEqual(detect_mode(pull), "raw")
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--redact", "--key-dir", str(Path(d, "key")), "--workers", "1"])
+            self.assertEqual(code, 0, buf.getvalue())
+            today = dt.date.today().isoformat()
+            self.assertIn("Mode: raw", Path(d, f"oct-10_screen_{today}_team.md").read_text())
+            self.assertNotIn(A, Path(d, f"oct-10_screen_{today}.md").read_text())
+
+    def test_raw_files_under_data_redacted_are_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            pull = Path(d, "repo", "data-redacted", "oct-10"); self._raw_pull(pull)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = main(["--data", str(pull), "--workers", "1"])
+            self.assertEqual(code, 2)
+            self.assertIn("Refusing", buf.getvalue())
+            self.assertFalse(Path(d, "repo", "reports").exists())
+
+    def test_out_under_reports_refused_for_raw_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "repo"); pull = repo / RAW_FOLDER_NAMES[-1] / "oct-10"; self._raw_pull(pull)
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.md"), "--workers", "1"])
+            self.assertEqual(code, 2)
+            self.assertFalse((repo / "reports" / "x.md").exists())
+
+    def test_out_with_redact_outside_repo_keeps_both_reports(self):
+        with tempfile.TemporaryDirectory() as d:
+            pull = Path(d, "pull"); self._raw_pull(pull)
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--redact", "--out", str(Path(d, "r.md")), "--key-dir", str(Path(d, "key")), "--workers", "1"])
+            self.assertEqual(code, 0, buf.getvalue())
+            self.assertIn(A, Path(d, "r_team.csv").read_text())   # the csv lists every participant
+            self.assertNotIn(A, Path(d, "r.csv").read_text())
+            self.assertIn("# Participant screen: pull\n", Path(d, "r.md").read_text())
+
+    def test_csv_under_reports_refused_for_raw_data(self):
+        """The CSV lists every participant with its real id; it is as sensitive as the report."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "repo"); pull = repo / RAW_FOLDER_NAMES[-1] / "oct-10"; self._raw_pull(pull)
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--csv", str(repo / "reports" / "x.csv"), "--workers", "1"])
+            self.assertEqual(code, 2)
+            self.assertFalse((repo / "reports" / "x.csv").exists())
+
+    def test_out_into_reports_refused_for_a_pull_outside_the_layout(self):
+        """A pull in Downloads screened with --out into a repo's reports/: the folder is recognised by
+        what sits beside it, not by where the data came from; with --redact the _team file would land there."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "repo"); (repo / RAW_FOLDER_NAMES[-1]).mkdir(parents=True)
+            pull = Path(d, "Downloads", "oct-10"); self._raw_pull(pull)
+            for extra in ([], ["--redact", "--key-dir", str(Path(d, "key"))]):
+                buf = io.StringIO()
+                with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                    code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.md"), "--workers", "1"] + extra)
+                self.assertEqual(code, 2, extra)
+                self.assertFalse((repo / "reports").exists() and list((repo / "reports").iterdir()), extra)
+
+    def test_case_variant_of_reports_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "repo"); pull = repo / RAW_FOLDER_NAMES[-1] / "oct-10"; self._raw_pull(pull)
+            (repo / "reports").mkdir()
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--out", str(repo / "Reports" / "x.md"), "--workers", "1"])
+            self.assertEqual(code, 2)
+            self.assertFalse(list((repo / "reports").iterdir()))
+
+    def test_one_raw_file_among_many_token_files_makes_the_pull_raw(self):
+        """detect_mode must look at every name, not the first 200."""
+        with tempfile.TemporaryDirectory() as d:
+            pull = Path(d, "oct-10"); pull.mkdir()
+            for i in range(201):
+                Path(pull, f"ident_{i:016x}__pdk-app-event__2026-09-14.json").write_text("[]")
+            Path(pull, f"weib_{A}1230__pdk-app-event__2026-09-14.json").write_text("[]")   # sorts after the 201
+            self.assertEqual(detect_mode(pull), "raw")
+
+    def test_symlink_into_raw_folder_refused_inside_agent(self):
+        with tempfile.TemporaryDirectory() as d:
+            real = Path(d, RAW_FOLDER_NAMES[-1], "oct-10"); self._raw_pull(real)
+            os.symlink(real, Path(d, "link"))
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), redirect_stdout(buf):
+                self.assertEqual(main(["--data", str(Path(d, "link")), "--workers", "1"]), 2)
 
 
 class ScrubCoverageTests(unittest.TestCase):
@@ -118,6 +250,26 @@ class ScrubCoverageTests(unittest.TestCase):
         self.assertIn("(WEIb/WEI…)", out)
         self.assertIn("(AIMEC…)", out)
 
+    def test_full_prefix_label_lets_the_rare_one_be_hidden(self):
+        """'(AIMECcplc/eplc)' left 'eplc' readable: the rare-prefix rule needs the whole word."""
+        p = S.mk_participant(A, prefixes=("AIMECcplc", "AIMECeplc"))
+        self.assertEqual(participant_label(p), f"{A} (AIMECcplc/AIMECeplc)")
+        out = scrub_text(participant_label(p), self.key_dir, prefix_counts={"aimeccplc_": 9, "aimeceplc_": 1})
+        self.assertNotIn("eplc", out)
+        self.assertIn("(AIMECcplc/AIMEC…)", out)
+
+    def test_scrub_counts_digit_prefixes_like_the_redactor(self):
+        """WEIb2_ is a cohort prefix to the redactor; the scrub must count it too or '(WEIb2)' stays readable."""
+        installs = {"WEIb2_" + A + "1230": new_install("WEIb2_" + A + "1230"), "WEIb_" + B + "1230": new_install("WEIb_" + B + "1230")}
+        _, prefixes, _ = _counts_for_scrub([], installs)
+        self.assertEqual(prefixes, {"weib2_": 1, "weib_": 1})
+
+    def test_scrub_leaves_ordinary_words_and_short_ids(self):
+        """A prefix the redactor would not recognise, or a device id of '1', must not rewrite prose."""
+        text = "**M1 Second Prolific id** Count: 1 None"
+        out = scrub_text(text, self.key_dir, prefix_counts={"prolific_": 1}, device_ids={"1", "None", "long-device-id"})
+        self.assertEqual(out, text)
+
     def test_typed_link_and_rlz_evidence_are_urls(self):
         links = [S.mk_visit(f"https://survey.example/s?PROLIFIC_PID={A}&SESSION_ID={i:024x}", ts=T + i * 100,
                             transition="typed", visit_id=i + 1) for i in range(8)]
@@ -145,7 +297,7 @@ class SymlinkTests(unittest.TestCase):
             (repo / "raw-data").mkdir(parents=True)
             os.symlink(real, repo / "raw-data" / "oct-10")
             buf = io.StringIO()
-            with mock.patch.dict(os.environ, {"CLAUDECODE": ""}), redirect_stdout(buf):
+            with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
                 code = main(["--data", str(repo / "raw-data" / "oct-10"), "--redact", "--workers", "1"])
             self.assertEqual(code, 0, buf.getvalue())
             self.assertTrue(list((repo / "reports-team").glob("oct-10_screen_*.md")), buf.getvalue())
@@ -278,6 +430,21 @@ class ScanToleranceTests(unittest.TestCase):
             raw[30 + len(name):30 + len(name) + 8] = b"\0" * 8     # corrupt the compressed stream
             z.write_bytes(bytes(raw))
             self.assertEqual(read_points(Input(z, name)), [])
+
+    def test_header_and_exit_name_files_not_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "bad.zip").write_bytes(b"PK\x03\x04 truncated")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                self.assertEqual(main(["--data", d, "--workers", "1"]), 3)
+            self.assertIn("corrupt_zip 1", buf.getvalue())
+            ident = "WEIb_" + A + "1230"
+            S.write_file(d, ident, "pdk-system-status", "2026-09-14", [S.status(ident)])
+            S.write_file(d, ident, "rex-history-visit", "2026-09-14", [S.visit(ident, "https://news.example/", 1)])
+            with redirect_stdout(buf):
+                self.assertEqual(main(["--data", d, "--workers", "1", "--out", str(Path(d, "r.md"))]), 0)
+            self.assertIn("Files not read: corrupt_zip 1.", Path(d, "r.md").read_text())
+            self.assertIn("Visits without a time: 0.", Path(d, "r.md").read_text())
 
     def test_header_reports_unreadable_files_and_merged_installs(self):
         with tempfile.TemporaryDirectory() as d:

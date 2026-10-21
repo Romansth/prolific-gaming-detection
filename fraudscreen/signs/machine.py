@@ -12,27 +12,39 @@ WINDOW_7D = 7 * 86400
 
 
 def hw_key(s):
-    """Machine key on platforms whose byte counts discriminate; None on Mac and ChromeOS."""
-    if s.plat not in ("Win", "Linux"):
+    """Machine key on platforms whose byte counts discriminate; None on Mac and ChromeOS, and None
+    for a record with no cpu, memory or processor count (every such record would share one key).
+    Removable media are left out: a USB stick is not the machine."""
+    if s.plat not in ("Win", "Linux") or not s.cpu or s.mem <= 0 or s.nproc <= 0:
         return None
-    disks = ";".join(str(c) for _, c in sorted(s.disks, key=lambda d: d[1]) if c >= FIXED_DISK_MIN)
+    disks = ";".join(str(c) for d, c in sorted(s.disks, key=lambda d: d[1]) if c >= FIXED_DISK_MIN and d not in s.removable)
     return f"{s.plat}|{s.cpu}|x{s.nproc}|{s.arch}|mem{s.mem}|disk{disks}"
 
 
-def _spans(p):
-    """key -> [(start, end, n)] of status points per transient id (disk and display ids)."""
-    out = defaultdict(lambda: [None, None, 0])
+def _times(p):
+    """transient id (disk or display) -> sorted times of the status points that reported it."""
+    out = defaultdict(list)
     for inst in p["installs"]:
         for s in inst["status"]:
-            ids = [d for d, _ in s.disks] + [d for d, _, _, _ in s.displays]
-            for tid in ids:
-                if len(tid) < 6:
-                    continue
-                e = out[tid]
-                e[0] = s.ts if e[0] is None else min(e[0], s.ts)
-                e[1] = s.ts if e[1] is None else max(e[1], s.ts)
-                e[2] += 1
-    return out
+            for tid in [d for d, _ in s.disks] + [d for d, _, _, _ in s.displays]:
+                if len(tid) >= 6:
+                    out[tid].append(s.ts)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _same_minute(a, b):
+    """The first (ta, tb) within 60 s between two sorted time lists, else None. Overall ranges are
+    not enough: an id seen on day 0 and day 10 by one person and day 5 by another was never in
+    one running browser."""
+    i = j = 0
+    while i < len(a) and j < len(b):
+        if abs(a[i] - b[j]) <= 60:
+            return a[i], b[j]
+        if a[i] < b[j]:
+            i += 1
+        else:
+            j += 1
+    return None
 
 
 def score_machine(p, ctx):
@@ -44,14 +56,15 @@ def score_machine(p, ctx):
             res.notes.append("no status points")
         return r
     own = p["key"]
-    # M2: a transient id shared with another participant over overlapping minutes
-    mine = _spans(p)
-    for tid, (a0, a1, n) in sorted(mine.items()):
-        for other, b0, b1, m in ctx.fleet.transient_ids.get(tid, []):
+    # M2: a transient id reported by another participant within the same minute
+    mine = _times(p)
+    for tid, ts in sorted(mine.items()):
+        for other, ots in ctx.fleet.transient_ids.get(tid, []):
             if other == own:
                 continue
-            if b0 <= a1 + 60 and a0 <= b1 + 60:
-                r["M2"].add(Evidence(fmt_utc(a0), f"id {tid}: this {fmt_utc(a0)}..{fmt_utc(a1)} ({n} pts); {other} {fmt_utc(b0)}..{fmt_utc(b1)} ({m} pts)", ""))
+            pair = _same_minute(ts, ots)
+            if pair:
+                r["M2"].add(Evidence(fmt_utc(pair[0]), f"id {tid}: this {fmt_utc(pair[0])} and {other} {fmt_utc(pair[1])} within a minute ({len(ts)} vs {len(ots)} pts)", ""))
                 r["M2"].link(other)
     # m1: shared hardware key
     keys = Counter()
@@ -86,7 +99,7 @@ def score_machine(p, ctx):
         if names:
             r["m5"].add(Evidence(fmt_utc(s.ts), f"display: {names[0]} {';'.join(f'{w}x{h}' for _, w, h, _ in s.displays)}", s.file))
             break
-    by_time = sorted(((s.ts, (w, h)) for s in status for _, w, h, _ in s.displays), key=lambda x: x[0])
+    by_time = sorted(((s.ts, (w, h)) for s in status for _, w, h, _ in s.displays if w > 0 and h > 0), key=lambda x: x[0])
     window = Counter()   # sizes inside the sliding 7-day window, two pointers over the sorted points
     j = 0
     for i, (t0, _) in enumerate(by_time):
