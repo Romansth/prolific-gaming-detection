@@ -1,0 +1,4 @@
+# ripgrep (and Claude Code's search) honour .gitignore; these two folders are ignored by git but
+# are the ones Claude works from, so they are whitelisted for search here.
+!data-redacted/
+!reports/

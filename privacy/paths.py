@@ -1,0 +1,40 @@
+"""Default locations. The raw and processed folders sit next to the repo, so
+recursive searches from inside the repo never reach them."""
+import os
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+DEFAULT_RAW = REPO.parent / "user_data_raw"
+DEFAULT_PROCESSED = REPO.parent / "report_processed"
+DEFAULT_SAFE = REPO / "user_data_safe"
+DEFAULT_REPORTS = REPO / "report_claude"
+RAW_FOLDER_NAME = DEFAULT_RAW.name   # the guard keys on this folder name, wherever it sits
+RAW_FOLDER_NAMES = (RAW_FOLDER_NAME, "raw-data")   # ... and on the screening repo's raw folder
+
+
+def inside_claude():
+    # Claude Code sets CLAUDECODE=1 for every shell it starts; a person's
+    # Terminal does not, so this tells the two apart.
+    return os.environ.get("CLAUDECODE") == "1"
+
+
+def in_raw_folder(path):
+    """True when path is, or lies inside, a folder bearing the team's raw-folder name."""
+    p = Path(os.path.abspath(path))
+    names = set(RAW_FOLDER_NAMES) | {RAW_FOLDER_NAME}
+    return any(part in names for part in p.parts)
+
+
+def find_key_dir(start):
+    """The nearest existing .redaction/ walking up from start, else <start>/.redaction."""
+    p = Path(start).resolve()
+    for folder in [p] + list(p.parents):
+        if (folder / ".redaction").is_dir():
+            return folder / ".redaction"
+    return p / ".redaction"
+
+
+def within(path, folder):
+    """True when path is folder or anything inside it."""
+    p, f = Path(path).resolve(), Path(folder).resolve()
+    return p == f or f in p.parents

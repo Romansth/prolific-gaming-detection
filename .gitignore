@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+# participant data and everything derived from it with real ids: never committed
+raw-data/*
+!raw-data/.gitkeep
+data-redacted/*
+!data-redacted/.gitkeep
+reports/*
+!reports/.gitkeep
+reports-team/*
+!reports-team/.gitkeep
+.redaction/
+*_redacted/
+*_screen_*.md
+*_screen_*.csv
