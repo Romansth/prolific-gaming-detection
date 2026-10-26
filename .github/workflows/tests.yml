@@ -7,8 +7,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest (26.04) has no prebuilt Python 3.9, and 3.9 is what stock macOS ships,
+    # so it stays in the matrix. Not a container: the tests check unreadable files, which root can read.
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.9", "3.12"]
     steps:
