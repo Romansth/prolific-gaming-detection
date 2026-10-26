@@ -8,6 +8,6 @@ if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/
 fi
 "$PY" -m venv .venv
 echo "Ready. Run the screen with:"
-echo "  ./screen.sh --data raw-data/<pull> --redact"
+echo "  ./screen.sh"
 echo "Look up a participant's token with:"
 echo "  ./screen.sh lookup <prolific id>"
