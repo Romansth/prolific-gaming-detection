@@ -9,6 +9,19 @@ Evidence = namedtuple("Evidence", "when what file")
 Sign = namedtuple("Sign", "id tier title rule innocent modes")
 MAX_EVIDENCE = 5
 
+
+def n_of(n, noun):
+    """'1 page' / '3 pages' (regular plurals only)."""
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def join_and(items):
+    """'a', 'a and b', 'a, b and c'."""
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
 SIGNS = [
     Sign("M1", "major", "Second Prolific id used in the monitored browser",
          "A local visit to a Prolific-specific URL (app.prolific.com with PROLIFIC_PID, any host with PROLIFIC_PID/prolific_pid, "
@@ -127,9 +140,12 @@ class SignResult:
     linked: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     available: bool = True
+    headline: str = ""   # one plain sentence with the specifics, written by the sign module
+    rows: int = 0        # evidence rows added (count may be redefined by the module: minutes, sessions)
 
     def add(self, ev):
         self.count += 1
+        self.rows += 1
         if len(self.evidence) < MAX_EVIDENCE:
             self.evidence.append(ev)
         self.fired = True

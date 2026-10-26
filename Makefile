@@ -11,7 +11,7 @@ synth:
 
 # Allow-list: only the package, its tests and the launchers go into the zip. Nothing written by a
 # run (reports, redacted copies, keys) can be picked up, whatever folder it landed in.
-DIST_FILES = fraudscreen privacy tests tools .claude .codex README.md CLAUDE.md AGENTS.md Makefile setup.sh setup.ps1 screen.sh screen.ps1 .gitignore .ignore \
+DIST_FILES = fraudscreen privacy tests tools docs .claude .codex README.md CLAUDE.md AGENTS.md Makefile setup.sh setup.ps1 screen.sh screen.ps1 .gitignore .ignore \
              raw-data/.gitkeep data-redacted/.gitkeep reports/.gitkeep reports-team/.gitkeep
 dist:
 	rm -f ../prolific-gaming-detection-$(VERSION).zip

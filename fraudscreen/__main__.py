@@ -1,6 +1,7 @@
-"""python -m fraudscreen --data <folder> [--out report.md] [--csv file.csv] [--redact] ..."""
+"""python -m fraudscreen --data <folder> [--out report.html] [--csv file.csv] [--redact] ..."""
 import argparse
 import datetime as dt
+from collections import Counter
 import os
 import sys
 import time
@@ -11,9 +12,9 @@ from fraudscreen.arms import load_arms, participant_arm
 from fraudscreen.files import discover, list_inputs, parse_name
 from fraudscreen.fleet import build_fleet
 from fraudscreen.participants import _PIDTOKEN_RE, _RAW_RE, _TOKEN_RE, default_exclude, group
-from fraudscreen.report import render_markdown, write_csv
+from fraudscreen.report import build_model, render_html, write_csv
 from fraudscreen.scan import scan_folder
-from fraudscreen.scrub import scrub_file
+from fraudscreen.scrub import leaks, scrub_file, scrub_model
 from fraudscreen.signs import SIGNS, Context
 from fraudscreen.signs.accounts import score_accounts
 from fraudscreen.signs.behaviour import score_behaviour
@@ -111,7 +112,7 @@ def refuse_inside_claude(folder):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fraudscreen", description="Screen a folder of PDK exports for signs of participant gaming.")
     ap.add_argument("--data", required=True, help="folder of per-identifier export files (json, or zips of them)")
-    ap.add_argument("--out", help="markdown report path (default: <folder>_screen_<date>.md, or reports/ in a repo layout)")
+    ap.add_argument("--out", help="HTML report path (default: <folder>_screen_<date>.html, or reports/ in a repo layout)")
     ap.add_argument("--csv", help="csv path (default: next to the report)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--redact", action="store_true", help="run the privacy redactor first and screen the redacted copy")
@@ -162,7 +163,7 @@ def main(argv=None):
                 installs=sum(len(p["installs"]) for p in participants), participants=len(participants), skipped=dict(skipped),
                 unreadable=sum(i["unreadable"] for i in installs.values()), skipped_files=dict(skipped_files),
                 no_time=sum(i.get("no_time", 0) for i in installs.values()),
-                date_range=f"{days[0]}..{days[-1]}" if days else "", version=__version__, seconds=time.time() - t_start,
+                date_range=f"{days[0]}..{days[-1]}" if days else "", version=__version__, seconds=time.time() - t_start, run_date=today,
                 arms_available=bool(arms))
     # where the first (unscrubbed) report goes: a raw screen carries real ids and belongs with the team
     pub = None
@@ -172,22 +173,22 @@ def main(argv=None):
             # the name given is the shareable report; the real-id one goes beside it
             pub, out = out, out.with_name(out.stem + "_team" + out.suffix)
     elif repo and raw_mode:
-        out = repo / "reports-team" / f"{folder.name}_screen_{today}.md"
+        out = repo / "reports-team" / f"{folder.name}_screen_{today}.html"
     elif repo:
         # a screen of the redacted copy must not replace the scrubbed report of the raw screen
-        out = repo / "reports" / f"{folder.name}_screen_{today}_from-redacted.md"
+        out = repo / "reports" / f"{folder.name}_screen_{today}_from-redacted.html"
     else:
-        out = folder.parent / f"{folder.name}_screen_{today}{'_team' if args.redact else ''}.md"
+        out = folder.parent / f"{folder.name}_screen_{today}{'_team' if args.redact else ''}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     csv_path = Path(args.csv) if args.csv else out.with_suffix(".csv")
     if raw_mode and any(_in_shareable_folder(x, repo) for x in (out, csv_path)):
         print("Refusing: a raw screen cannot write its report or CSV under reports/ (they carry real ids); "
               "drop --out/--csv or point them elsewhere.")
         return 2
-    out.write_text(render_markdown(results, participants, fleet, meta), encoding="utf-8")
+    model = build_model(results, participants, fleet, meta)
+    out.write_text(render_html(model), encoding="utf-8")
     write_csv(csv_path, results, participants)
-    listed = sum(1 for p in participants if any(r.fired for r in results[p["key"]].values()))
-    print(f"Report: {out}\nCSV: {csv_path}\nParticipants screened {len(participants)}, listed {listed}, mode {mode}, {meta['seconds']:.0f} s.")
+    print(f"Report: {out}\nCSV: {csv_path}\nParticipants screened {len(participants)}, flagged {model['n_flagged']}, mode {mode}, {meta['seconds']:.0f} s.")
     if not args.redact:
         return 0
     if not raw_mode:
@@ -214,7 +215,20 @@ def main(argv=None):
     host_counts, prefix_counts, device_ids = _counts_for_scrub(participants, installs)
     pub = pub or ((repo / "reports" / out.name) if repo else out.with_name(out.name.replace("_team", "")))
     kw = dict(host_counts=host_counts, prefix_counts=prefix_counts, device_ids=device_ids)
-    scrub_file(out, pub, key_dir, **kw)
+    # the token-only page is rendered from the scrubbed data model, not scrubbed as HTML
+    try:
+        pub_model = scrub_model(model, key_dir, **kw)
+    except RuntimeError as exc:
+        print(f"Scrub failed: {exc}. The team report stands.")
+        return 2
+    pub_model["ids"] = "tokens"
+    hits = Counter(kind for kind, _ in leaks(pub_model, model))   # kinds only: the values would be the leak
+    if hits:
+        print("Refusing to write the token-only report: the leak check found "
+              + ", ".join(f"{n} {kind}" for kind, n in sorted(hits.items())) + ". The team report stands.")
+        return 2
+    pub.parent.mkdir(parents=True, exist_ok=True)
+    pub.write_text(render_html(pub_model), encoding="utf-8")
     scrub_file(csv_path, pub.with_suffix(".csv"), key_dir, **kw)
     print(f"Redacted data: {safe}\nScrubbed report: {pub}\nScrubbed CSV: {pub.with_suffix('.csv')}")
     return 0
@@ -224,7 +238,6 @@ def _counts_for_scrub(participants, installs):
     """Participants per host and identifiers per lower-cased prefix (the two census numbers the
     redactor's host and prefix rules use, so the scrubbed report follows the same decisions), and
     every storage or display id the report can quote (the redactor's dev tokens)."""
-    from collections import Counter
     hosts = {}
     devices = set()
     for p in participants:

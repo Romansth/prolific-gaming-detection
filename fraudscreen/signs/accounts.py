@@ -6,7 +6,7 @@ from collections import Counter
 from urllib.parse import parse_qsl, unquote
 
 from fraudscreen.participants import account_age_days, account_month_close
-from fraudscreen.signs import SignResult, evidence_from_visit, fmt_utc
+from fraudscreen.signs import SignResult, evidence_from_visit, fmt_utc, n_of
 
 _HEX24 = re.compile(r"^[0-9a-f]{24}$")
 _PIDTOK = re.compile(r"^pid_[0-9a-f]{16}$")
@@ -78,6 +78,7 @@ def score_accounts(p, ctx):
     logins = [v.t_ms for v in all_visits if v.host == "auth.prolific.com" and v.path.startswith("/u/login")]
     days = {}
     foreign_ids = set()
+    ids_of = {"M1": set(), "m2": set()}   # which ids each target saw, for its headline
     enrolled = set(ctx.by_key) | (set(ctx.fleet.enrolled_ids) if ctx.fleet else set())
     pairs = foreign_id_visits(p, enrolled=enrolled, raw_mode=ctx.raw_mode)
     completion = [(v, pid) for v, pid in pairs if v.host == "app.prolific.com" and "submissions/complete" in v.path]
@@ -86,6 +87,7 @@ def score_accounts(p, ctx):
         target = r["M1"] if v.is_local is not False else r["m2"]
         target.add(evidence_from_visit(v))
         foreign_ids.add(pid)
+        ids_of[target.sign_id].add(pid)
         if pid in ctx.by_key:
             target.link(pid)
         d = fmt_utc(v.t_ms / 1000)[:10]
@@ -100,6 +102,10 @@ def score_accounts(p, ctx):
                 res.notes.append("foreign ids: " + ", ".join(sorted(foreign_ids)))
                 res.notes.append("enrolled: " + ("yes" if enrolled else "no"))
                 res.notes.append("per day: " + "; ".join(f"{d} own {c['own']} foreign {c['foreign']}" for d, c in sorted(days.items())))
+                how = "opened locally" if res.sign_id == "M1" else "synced in from another device"
+                own_enrolled = any(pid in ctx.by_key or pid in ctx.fleet.enrolled_ids for pid in ids_of[res.sign_id])
+                res.headline = (f"{n_of(res.count, 'study page')} {how} under another Prolific id: " + ", ".join(sorted(ids_of[res.sign_id]))
+                                + (" (also enrolled in this pull)" if own_enrolled else ""))
         if r["M1"].fired:
             near = sum(1 for t in logins if any(abs(t - v.t_ms) <= 3600 * 1000 for v, _ in pairs if v.is_local is not False))
             r["M1"].notes.append(f"logins within 60 min: {near} (auth.prolific.com/u/login)")

@@ -20,7 +20,7 @@ from fraudscreen.__main__ import _counts_for_scrub, detect_mode, main, score_all
 from fraudscreen.files import Input, read_points
 from fraudscreen.fleet import Fleet, build_fleet
 from fraudscreen.records import merge_install, new_install
-from fraudscreen.report import participant_label, render_markdown
+from fraudscreen.report import build_model, participant_label, render_html
 from fraudscreen.scan import scan_one
 from fraudscreen.scrub import scrub_text
 from fraudscreen.signs import SIGNS, Context, SignResult
@@ -137,8 +137,8 @@ class ReportPlacementTests(unittest.TestCase):
                 code = main(["--data", str(pull), "--redact", "--key-dir", str(Path(d, "key")), "--workers", "1"])
             self.assertEqual(code, 0, buf.getvalue())
             today = dt.date.today().isoformat()
-            self.assertIn("Mode: raw", Path(d, f"oct-10_screen_{today}_team.md").read_text())
-            self.assertNotIn(A, Path(d, f"oct-10_screen_{today}.md").read_text())
+            self.assertIn("Mode: raw", Path(d, f"oct-10_screen_{today}_team.html").read_text())
+            self.assertNotIn(A, Path(d, f"oct-10_screen_{today}.html").read_text())
 
     def test_raw_files_under_data_redacted_are_refused(self):
         with tempfile.TemporaryDirectory() as d:
@@ -155,20 +155,36 @@ class ReportPlacementTests(unittest.TestCase):
             repo = Path(d, "repo"); pull = repo / RAW_FOLDER_NAMES[-1] / "oct-10"; self._raw_pull(pull)
             buf = io.StringIO()
             with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
-                code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.md"), "--workers", "1"])
+                code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.html"), "--workers", "1"])
             self.assertEqual(code, 2)
-            self.assertFalse((repo / "reports" / "x.md").exists())
+            self.assertFalse((repo / "reports" / "x.html").exists())
 
     def test_out_with_redact_outside_repo_keeps_both_reports(self):
         with tempfile.TemporaryDirectory() as d:
             pull = Path(d, "pull"); self._raw_pull(pull)
             buf = io.StringIO()
             with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
-                code = main(["--data", str(pull), "--redact", "--out", str(Path(d, "r.md")), "--key-dir", str(Path(d, "key")), "--workers", "1"])
+                code = main(["--data", str(pull), "--redact", "--out", str(Path(d, "r.html")), "--key-dir", str(Path(d, "key")), "--workers", "1"])
             self.assertEqual(code, 0, buf.getvalue())
             self.assertIn(A, Path(d, "r_team.csv").read_text())   # the csv lists every participant
             self.assertNotIn(A, Path(d, "r.csv").read_text())
-            self.assertIn("# Participant screen: pull\n", Path(d, "r.md").read_text())
+            self.assertIn("<title>Participant screen: pull</title>", Path(d, "r.html").read_text())
+
+    def test_token_report_refused_when_the_leak_check_hits(self):
+        """Defence in depth: a scrubbed model that still carries a real id is never written, and the
+        refusal names kinds, not values."""
+        with tempfile.TemporaryDirectory() as d:
+            pull = Path(d, "pull"); self._raw_pull(pull)
+            buf = io.StringIO()
+            with mock.patch("fraudscreen.__main__.scrub_model", lambda model, key_dir, **kw: dict(model, folder="see " + A)), \
+                    mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
+                code = main(["--data", str(pull), "--redact", "--out", str(Path(d, "r.html")), "--key-dir", str(Path(d, "key")), "--workers", "1"])
+            self.assertEqual(code, 2, buf.getvalue())
+            self.assertIn("leak check found", buf.getvalue())
+            self.assertNotIn(A, buf.getvalue())
+            self.assertFalse(Path(d, "r.html").exists())
+            self.assertFalse(Path(d, "r.csv").exists())
+            self.assertTrue(Path(d, "r_team.html").exists())
 
     def test_csv_under_reports_refused_for_raw_data(self):
         """The CSV lists every participant with its real id; it is as sensitive as the report."""
@@ -189,7 +205,7 @@ class ReportPlacementTests(unittest.TestCase):
             for extra in ([], ["--redact", "--key-dir", str(Path(d, "key"))]):
                 buf = io.StringIO()
                 with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
-                    code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.md"), "--workers", "1"] + extra)
+                    code = main(["--data", str(pull), "--out", str(repo / "reports" / "x.html"), "--workers", "1"] + extra)
                 self.assertEqual(code, 2, extra)
                 self.assertFalse((repo / "reports").exists() and list((repo / "reports").iterdir()), extra)
 
@@ -199,7 +215,7 @@ class ReportPlacementTests(unittest.TestCase):
             (repo / "reports").mkdir()
             buf = io.StringIO()
             with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
-                code = main(["--data", str(pull), "--out", str(repo / "Reports" / "x.md"), "--workers", "1"])
+                code = main(["--data", str(pull), "--out", str(repo / "Reports" / "x.html"), "--workers", "1"])
             self.assertEqual(code, 2)
             self.assertFalse(list((repo / "reports").iterdir()))
 
@@ -300,8 +316,8 @@ class SymlinkTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {v: "" for v in AGENT_ENV_VARS}), redirect_stdout(buf):
                 code = main(["--data", str(repo / "raw-data" / "oct-10"), "--redact", "--workers", "1"])
             self.assertEqual(code, 0, buf.getvalue())
-            self.assertTrue(list((repo / "reports-team").glob("oct-10_screen_*.md")), buf.getvalue())
-            self.assertTrue(list((repo / "reports").glob("oct-10_screen_*.md")))
+            self.assertTrue(list((repo / "reports-team").glob("oct-10_screen_*.html")), buf.getvalue())
+            self.assertTrue(list((repo / "reports").glob("oct-10_screen_*.html")))
             self.assertTrue((repo / "raw-data" / ".redaction" / "key").exists())
             self.assertTrue((repo / "data-redacted" / "oct-10" / "identifiers.csv").exists())
             self.assertFalse((real / ".redaction").exists())
@@ -309,7 +325,7 @@ class SymlinkTests(unittest.TestCase):
 
 
 class RedactedModeTests(unittest.TestCase):
-    """I3: internal ids skipped, raw-only signs n/a, case variants merged, distinct report name."""
+    """I3: internal ids skipped, raw-only signs not available, case variants merged, distinct report name."""
 
     def test_token_without_pid_is_not_a_participant(self):
         idmap = {"ident_" + "a" * 16: ("", "", "", "ident_" + "a" * 16)}
@@ -442,9 +458,9 @@ class ScanToleranceTests(unittest.TestCase):
             S.write_file(d, ident, "pdk-system-status", "2026-09-14", [S.status(ident)])
             S.write_file(d, ident, "rex-history-visit", "2026-09-14", [S.visit(ident, "https://news.example/", 1)])
             with redirect_stdout(buf):
-                self.assertEqual(main(["--data", d, "--workers", "1", "--out", str(Path(d, "r.md"))]), 0)
-            self.assertIn("Files not read: corrupt_zip 1.", Path(d, "r.md").read_text())
-            self.assertIn("Visits without a time: 0.", Path(d, "r.md").read_text())
+                self.assertEqual(main(["--data", d, "--workers", "1", "--out", str(Path(d, "r.html"))]), 0)
+            self.assertIn("Files not read: corrupt_zip 1.", Path(d, "r.html").read_text())
+            self.assertIn("Visits without a time: 0.", Path(d, "r.html").read_text())
 
     def test_header_reports_unreadable_files_and_merged_installs(self):
         with tempfile.TemporaryDirectory() as d:
@@ -455,9 +471,9 @@ class ScanToleranceTests(unittest.TestCase):
             Path(d, f"{ident}__pdk-app-event__2026-09-14.json").write_text("[{\"truncated\": ")
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = main(["--data", d, "--workers", "1", "--out", str(Path(d, "r.md"))])
+                code = main(["--data", d, "--workers", "1", "--out", str(Path(d, "r.html"))])
             self.assertEqual(code, 0, buf.getvalue())
-            md = Path(d, "r.md").read_text()
+            md = Path(d, "r.html").read_text()
             self.assertIn("Installs: 1.", md)
             self.assertIn("Unreadable files: 1", md)
 
@@ -524,7 +540,7 @@ class EmailMaskTests(unittest.TestCase):
         res = {A: score_location(p, ctx(p))}
         for s in SIGNS:
             res[A].setdefault(s.id, SignResult(s.id))
-        md = render_markdown(res, [p], Fleet(), {"participants": 1})
+        md = render_html(build_model(res, [p], Fleet(), {"participants": 1}))
         self.assertTrue(res[A]["M4"].fired)
         self.assertNotIn("jane.doe", md)
         self.assertIn("[email]", md)

@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, unquote
 
 from fraudscreen import hosts, tz
 from fraudscreen.fleet import local_visits, night_share, reported_zone
-from fraudscreen.signs import Evidence, SignResult, evidence_from_visit, fmt_utc, visit_url
+from fraudscreen.signs import Evidence, SignResult, evidence_from_visit, fmt_utc, join_and, n_of, visit_url
 
 _CCTLD_RE = re.compile(r"^accounts\.google\.(?!com$)[a-z.]+$")
 # US territories count as home, as their clocks do in tz.py
@@ -56,6 +56,14 @@ def _signin_hits(p):
     return out
 
 
+def _route_label(v):
+    """'google.co.ke' for a country sign-in host; 'consent.google.com (gl=KE)' for a consent redirect."""
+    if v.host.startswith("accounts.google."):
+        return v.host[len("accounts."):]
+    gl = next((val for name, val in _params(v) if name.lower() == "gl"), "")
+    return f"{v.host} (gl={gl.upper()})"
+
+
 def _local_date(t, zone):
     return fmt_utc(t + tz.offset_hours(zone, t) * 3600)[:10]
 
@@ -87,6 +95,8 @@ def score_location(p, ctx):
         for v in hits:
             target.add(evidence_from_visit(v))
         target.notes.append(f"days: {', '.join(days)}")
+        target.headline = (f"Google sign-ins routed through {join_and(sorted({_route_label(v) for v in hits}))} "
+                           f"on {n_of(len(days), 'day')} ({join_and(days)})")
         target.notes.extend(context_notes(p, [v.t_ms / 1000 for v in hits]))
     # M5 / m17: observation minutes, days as local dates of the zone observed
     points = _zone_observations(p)
@@ -100,6 +110,8 @@ def score_location(p, ctx):
         target.add(Evidence(fmt_utc(min(t for t, _ in non_us)), "zones: " + ", ".join(f"{z} ({n} observation minutes)" for z, n in zones.most_common()), ""))
         target.count = len(non_us)
         target.notes.append(f"{len(days)} days, {share:.0%} of {len(points)} observation minutes")
+        target.headline = (f"Device clock set to {join_and(z for z, _ in zones.most_common(3))} on {n_of(len(days), 'day')}, "
+                           f"{share:.0%} of {n_of(len(points), 'observation minute')}")
         series = sorted(per_day.items())[:10]
         target.notes.append("per day: " + "; ".join(f"{d} {z.split('/')[-1]}={n}" for (d, z), n in series))
         target.notes.extend(context_notes(p, [t for t, _ in non_us]))
@@ -119,6 +131,8 @@ def score_location(p, ctx):
             r["M6"].add(evidence_from_visit(first[cc], f"rlz country {cc}: {visit_url(first[cc])}"))
             r["M6"].count = n
             r["M6"].notes.append("codes: " + ", ".join(f"{c}={k}" for c, k in codes.most_common()))
+            if not r["M6"].headline:   # the most common non-US code names the finding
+                r["M6"].headline = f"Chrome installed with a {cc} locale ({n_of(n, 'search page')} {'carries' if n == 1 else 'carry'} the install code)"
             r["M6"].notes.extend(context_notes(p, [first[cc].t_ms / 1000]))
     # m8
     zone = reported_zone(p)
@@ -139,6 +153,8 @@ def score_location(p, ctx):
                 r["m8"].add(Evidence("", f"{share:.0%} of {len(vs)} visits at 01:00-05:00 {zone} (threshold {threshold:.0%}: fleet 95th pct {p95:.0%}, floor 20%)", ""))
                 r["m8"].notes.append("hours in reported zone: " + " ".join(f"{h:02d}:{hist.get(h, 0)}" for h in range(24)))
                 r["m8"].notes.append(f"best-fitting offset UTC{best[0]:+d} gives {best[1]:.0%} at night")
+                r["m8"].headline = (f"{share:.0%} of {n_of(len(vs), 'visit')} fall at 01:00-05:00 on the reported {zone} clock; "
+                                    f"a UTC{best[0]:+d} clock would put {best[1]:.0%} there")
                 r["m8"].notes.extend(context_notes(p, []))
     # m9
     for inst in p["installs"]:

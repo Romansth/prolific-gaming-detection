@@ -34,14 +34,14 @@ class CliTests(unittest.TestCase):
             small_folder(data)
             r = run_cli("--data", str(data), "--workers", "1")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            reports = list(Path(d).glob("pull_x_screen_*.md"))
+            reports = list(Path(d).glob("pull_x_screen_*.html"))
             self.assertEqual(len(reports), 1)
             md = reports[0].read_text()
             self.assertIn(A + " (WEIb)", md)
             self.assertIn("M3", md)
             self.assertIn("Mode: raw", md)
             self.assertTrue(list(Path(d).glob("pull_x_screen_*.csv")))
-            self.assertIn("1 participants carry", md)
+            self.assertIn("1 flagged", md)
 
     def test_exit_3_on_only_internal_ids(self):
         with tempfile.TemporaryDirectory() as d:
@@ -64,13 +64,13 @@ class CliTests(unittest.TestCase):
                          [S.visit(ident, "https://accounts.google.co.ke/accounts/SetSID", 1),
                           S.visit(ident, "https://accounts.google.co.ke/accounts/SetSID", 2, ts=S.T0 + 10 * 86400)])
             S.write_file(data, ident, "pdk-system-status", "2026-09-14", [S.status(ident)])
-            out = Path(d, "custom.md")
+            out = Path(d, "custom.html")
             r = run_cli("--data", str(data), "--workers", "1", "--out", str(out))
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             md = out.read_text()
             self.assertIn("Mode: redacted", md)
             self.assertIn("pid_fedcba9876543210", md)
-            self.assertIn("n/a", md)   # m12 unavailable
+            self.assertIn("not available for 1", md)   # m12 unavailable, counted in the appendix
             self.assertIn("M4", md)
 
     def test_arm_resolution(self):
@@ -80,7 +80,7 @@ class CliTests(unittest.TestCase):
             Path(d, "arms.json").write_text(json.dumps({"4016cabf0000": "WebEatsItself_CC"}))
             r = run_cli("--data", str(data), "--workers", "1", "--arms", str(Path(d, "arms.json")))
             self.assertEqual(r.returncode, 0, r.stderr)
-            md = list(Path(d).glob("pull_a_screen_*.md"))[0].read_text()
+            md = list(Path(d).glob("pull_a_screen_*.html"))[0].read_text()
             self.assertIn("WebEatsItself_CC", md)
 
 

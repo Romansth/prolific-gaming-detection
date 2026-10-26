@@ -1,11 +1,24 @@
-"""The markdown report (participants by signs, evidence, appendices) and the CSV."""
+"""The report: a data model of flagged participants (strong signs with their headlines and
+evidence, supporting signs as context), its self-contained HTML rendering, and the CSV that keeps
+every participant and every sign. The token-only copy is rendered from a scrubbed model
+(fraudscreen.scrub.scrub_model); finished HTML is never scrubbed, its escaped URLs would not
+parse."""
 import csv
+import html
 import re
 
-from fraudscreen.signs import SIGNS, sign_by_id
+from fraudscreen.signs import SIGNS, n_of
 
 # the team report carries real ids but never an address (the plan's "never e-mail addresses")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}(?:@|%40)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+STRONG = [s for s in SIGNS if s.tier == "major"]
+SUPPORT = [s for s in SIGNS if s.tier == "minor"]
+
+INTRO = ("A participant is flagged when at least one strong pattern was seen: a pattern where, in our judgment, gaming is "
+         "more likely than not. Each flagged participant lists what was seen, the evidence behind it, and the ordinary "
+         "explanation that would also produce it; someone has to look at the evidence and decide. Weaker, supporting patterns "
+         "are shown under a flagged participant for context only. They never flag anyone on their own.")
 
 EXCLUDED_SIGNALS = (
     ("Completion-code reuse", "every popular study hands out one code; 5,371 of 11,329 codes were shared in the audit pull"),
@@ -41,100 +54,226 @@ def _counts(results):
     return major, minor
 
 
-def _cell(r):
-    if not r.available:
-        return "n/a"
-    if not r.fired:
-        return ""
-    return "✓" if r.count <= 1 else f"✓{r.count}"
+def line_for(r, sign):
+    """The one sentence a reader gets for a fired sign: the module's headline, else its first
+    note, else its first evidence line, else the title."""
+    if r.headline:
+        return r.headline
+    if r.notes:
+        return r.notes[0]
+    if r.evidence:
+        return r.evidence[0].what
+    return sign.title
 
 
-def listed(results_by_key, participants):
-    rows = []
-    for p in participants:
-        res = results_by_key.get(p["key"])
-        if not res:
-            continue
-        major, minor = _counts(res)
-        if major + minor == 0:
-            continue
-        rows.append((major, minor, p, res))
-    rows.sort(key=lambda r: (-r[0], -r[1], r[2]["key"]))
-    return rows
-
-
-def render_markdown(results_by_key, participants, fleet, meta):
-    rows = listed(results_by_key, participants)
-    out = []
-    out.append(f"# Participant screen: {meta.get('folder', '')}")
-    out.append("")
-    out.append(f"Mode: {meta.get('mode', '')}. Files: {meta.get('files', 0)}. Unreadable files: {meta.get('unreadable', 0)}. "
-               f"Files not read: {_skipped(meta.get('skipped_files'))}. Visits without a time: {meta.get('no_time', 0)}. "
-               f"Installs: {meta.get('installs', 0)}. "
-               f"Participants screened: {meta.get('participants', 0)} (skipped: {_skipped(meta.get('skipped'))}). "
-               f"Dates: {meta.get('date_range', '')}. Tool version {meta.get('version', '')}, run time {meta.get('seconds', 0):.0f} s.")
-    out.append("")
-    out.append(f"{len(rows)} participants carry at least one sign. A participant with no sign is not listed. "
-               "Major signs are the proof bar; minor signs are support. Every tick has its evidence below; every sign has a fixed innocent reading.")
-    out.append("")
-    out.append("Legend: " + "; ".join(f"{s.id} {s.title}" for s in SIGNS))
-    out.append("")
-    head = ["Participant", "Study", "Arm", "Major"] + [s.id for s in SIGNS] + ["Linked to"]
-    out.append("| " + " | ".join(head) + " |")
-    out.append("|" + "|".join(["---"] * len(head)) + "|")
-    for major, minor, p, res in rows:
-        linked = sorted({k for s in SIGNS for k in res[s.id].linked})
-        cells = [participant_label(p), p.get("study", ""), p.get("arm", ""), str(major)] + [_cell(res[s.id]) for s in SIGNS] + [", ".join(linked)]
-        out.append("| " + " | ".join(cells) + " |")
-    out.append("")
-    out.append("## Evidence")
-    for major, minor, p, res in rows:
-        out.append("")
-        out.append(f"### {participant_label(p)}")
-        for s in SIGNS:
-            r = res[s.id]
-            if not r.fired:
-                continue
-            out.append("")
-            out.append(f"**{s.id} {s.title}**")
-            out.append(f"Rule: {s.rule}")
-            for e in r.evidence:
-                out.append(f"- {e.when} · {e.what} · {e.file}".replace(" ·  · ", " · ").rstrip(" ·"))
-            out.append(f"Count: {r.count}")
-            for n in r.notes:
-                out.append(n)
-            if r.linked:
-                out.append("Linked to: " + ", ".join(r.linked))
-            out.append(f"Innocent reading: {s.innocent}")
-    out.append("")
-    out.append("## Appendix A: signs and counts")
-    out.append("")
-    out.append("| Sign | Tier | Title | Rule | Participants fired / screened |")
-    out.append("|---|---|---|---|---|")
-    n_screened = meta.get("participants", len(participants))
-    for s in SIGNS:
-        fired = sum(1 for res in results_by_key.values() if res[s.id].fired)
-        avail = sum(1 for res in results_by_key.values() if res[s.id].available)
-        extra = "" if avail == len(results_by_key) else f" (not available for {len(results_by_key) - avail})"
-        out.append(f"| {s.id} | {s.tier} | {s.title} | {s.rule} | {fired} / {n_screened}{extra} |")
-    out.append("")
-    out.append("## Appendix B: excluded signals")
-    out.append("")
-    for name, why in EXCLUDED_SIGNALS:
-        out.append(f"- {name}: {why}.")
-    out.append("")
-    out.append("## Appendix C: limitations")
-    out.append("")
-    for line in LIMITATIONS:
-        out.append(f"- {line}")
-    out.append("")
-    return EMAIL_RE.sub("[email]", "\n".join(out))
+def _mask(obj):
+    if isinstance(obj, str):
+        return EMAIL_RE.sub("[email]", obj)
+    if isinstance(obj, list):
+        return [_mask(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _mask(v) for k, v in obj.items()}
+    return obj
 
 
 def _skipped(sk):
     if not sk:
         return "none"
     return ", ".join(f"{k} {v}" for k, v in sorted(dict(sk).items()))
+
+
+def run_line(meta):
+    return (f"Mode: {meta.get('mode', '')}. Files: {meta.get('files', 0)}. Unreadable files: {meta.get('unreadable', 0)}. "
+            f"Files not read: {_skipped(meta.get('skipped_files'))}. Visits without a time: {meta.get('no_time', 0)}. "
+            f"Installs: {meta.get('installs', 0)}. "
+            f"Participants screened: {meta.get('participants', 0)} (skipped: {_skipped(meta.get('skipped'))}). "
+            f"Dates: {meta.get('date_range', '')}. Tool version {meta.get('version', '')}, run time {meta.get('seconds', 0):.0f} s.")
+
+
+def build_model(results_by_key, participants, fleet, meta):
+    """Plain data (str, int, float, bool, None, list, dict) for render_html and scrub_model: the
+    flagged participants (at least one strong sign) as cards, the support-only participants as a
+    short table, the catalogue with counts, and the fixed appendix text. E-mail addresses are
+    masked here so neither copy carries one."""
+    flagged, support_only, n_clean = [], [], 0
+    for p in participants:
+        res = results_by_key.get(p["key"])
+        if not res:
+            continue
+        major, minor = _counts(res)
+        if major:
+            flagged.append((p, res, major))
+        elif minor:
+            support_only.append((p, res, minor))
+        else:
+            n_clean += 1
+    flagged_keys = {p["key"] for p, _, _ in flagged}
+    cards = []
+    for p, res, major in flagged:
+        strong = [dict(id=s.id, title=s.title, headline=line_for(res[s.id], s), innocent=s.innocent, rule=s.rule,
+                       evidence=[[e.when, e.what, e.file] for e in res[s.id].evidence], count=res[s.id].count, rows=res[s.id].rows,
+                       notes=list(res[s.id].notes), linked=list(res[s.id].linked)) for s in STRONG if res[s.id].fired]
+        support = [dict(id=s.id, title=s.title, line=line_for(res[s.id], s), linked=list(res[s.id].linked))
+                   for s in SUPPORT if res[s.id].fired]
+        linked = sorted({k for s in SIGNS for k in res[s.id].linked})
+        # connected flagged participants sort next to each other: the group is the smallest key among them
+        group = min([p["key"]] + [k for s in STRONG for k in res[s.id].linked if k in flagged_keys])
+        cards.append((group, dict(key=p["key"], label=participant_label(p), study=p.get("study", ""), arm=p.get("arm", ""),
+                                  browsers=sorted(p.get("browsers", ())), n_strong=major, strong=strong, support=support,
+                                  linked=linked)))
+    cards.sort(key=lambda g: (-g[1]["n_strong"], g[0], g[1]["key"]))
+    support_only.sort(key=lambda t: (-t[2], t[0]["key"]))
+    rows = [dict(key=p["key"], label=participant_label(p), study=p.get("study", ""), arm=p.get("arm", ""),
+                 patterns=[s.title for s in SUPPORT if res[s.id].fired]) for p, res, _ in support_only]
+    n_screened = meta.get("participants", len(participants))
+    catalogue = []
+    for s in SIGNS:
+        fired = sum(1 for res in results_by_key.values() if res[s.id].fired)
+        missing = sum(1 for res in results_by_key.values() if not res[s.id].available)
+        catalogue.append(dict(id=s.id, tier="strong" if s.tier == "major" else "supporting", title=s.title, rule=s.rule,
+                              innocent=s.innocent, fired=fired, screened=n_screened, missing=missing))
+    model = dict(title=f"Participant screen: {meta.get('folder', '')}", folder=meta.get("folder", ""), mode=meta.get("mode", ""),
+                 ids="tokens" if meta.get("mode") == "redacted" else "real",
+                 run_line=run_line(meta), n_screened=n_screened, n_flagged=len(cards), n_support_only=len(rows), n_clean=n_clean,
+                 intro=INTRO, flagged=[c for _, c in cards], support_only=rows, catalogue=catalogue,
+                 excluded=[list(x) for x in EXCLUDED_SIGNALS], limitations=list(LIMITATIONS),
+                 version=str(meta.get("version", "")), seconds=float(meta.get("seconds", 0) or 0),
+                 run_date=str(meta.get("run_date", "")))
+    return _mask(model)
+
+
+CSS = """
+:root{--bg:#fff;--fg:#1c1e21;--muted:#5f6368;--line:#dadce0;--card:#f8f9fa;--code:#eef0f2;--link:#0b57d0;
+--strong-bg:#fdecec;--strong-fg:#8a1c1c;--strong-line:#f1b8b8;--sup-bg:#eceff1;--sup-fg:#3c4043;--sup-line:#cfd4d9;--btn:#f1f3f4}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--fg:#e8eaed;--muted:#9aa0a6;--line:#30353b;--card:#1a1d21;--code:#23272c;
+--link:#8ab4f8;--strong-bg:#3a1c1c;--strong-fg:#ffb4b4;--strong-line:#6e2b2b;--sup-bg:#262a2f;--sup-fg:#c8ccd1;--sup-line:#3b4047;--btn:#2a2e33}}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 16px 48px;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+header,section,article,footer,p.intro{max-width:1100px;margin-left:auto;margin-right:auto}
+h1{font-size:26px;margin:0 0 6px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:16px 0 6px}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);padding:1px 4px;border-radius:4px;word-break:break-all}
+a{color:var(--link)}
+.lead{font-size:17px;margin:0 0 6px}.meta{color:var(--muted);font-size:13px;margin:4px 0}.intro{margin:14px auto 6px}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--muted);font-size:13px}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:13px;border:1px solid;margin:1px 2px 1px 0}
+.chip.strong{background:var(--strong-bg);color:var(--strong-fg);border-color:var(--strong-line)}
+.chip.support{background:var(--sup-bg);color:var(--sup-fg);border-color:var(--sup-line)}
+.code{color:var(--muted);font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px auto}
+.card h2{margin:0 0 2px;font-size:18px}.cohort{color:var(--muted);font-weight:400;font-size:15px}
+.finding{border-left:3px solid var(--strong-line);padding-left:12px;margin:14px 0}
+.headline{font-weight:600;margin:4px 0 8px}
+.evidence{font-size:13px}.evidence .when{white-space:nowrap}.evidence .what{word-break:break-all}.evidence .file{color:var(--muted);font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+.innocent{color:var(--muted);margin:8px 0 4px}.rule{color:var(--muted);font-size:13px}
+details{margin:6px 0}summary{cursor:pointer;color:var(--muted);font-size:14px}details[open]>summary{margin-bottom:6px}
+.support h3{color:var(--muted);font-weight:600}.hint{font-weight:400}.support ul{margin:4px 0;padding-left:20px}.support li{margin:3px 0;font-size:14px;color:var(--muted)}
+.links{margin:10px 0 0}.tools{margin:6px 0 10px}button{font:13px inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:var(--btn);color:var(--fg);cursor:pointer}
+.none{padding:12px;border:1px dashed var(--line);border-radius:8px}
+footer{margin-top:28px}
+@media print{.tools{display:none}.card{break-inside:avoid}body{padding:0}}
+"""
+JS = "function toggleAll(o){document.querySelectorAll('details').forEach(function(d){d.open=o;});}"
+
+
+def _e(s):
+    return html.escape(str(s), quote=True)
+
+
+def render_html(model):
+    """One self-contained page: no external resource, every string escaped."""
+    e = _e
+    out = []
+    w = out.append
+    flagged_keys = {c["key"] for c in model["flagged"]}
+
+    def ref(k):   # a link when the participant has a card, plain text otherwise
+        return f'<a href="#p-{e(k)}"><code>{e(k)}</code></a>' if k in flagged_keys else f"<code>{e(k)}</code>"
+
+    w("<!doctype html>")
+    w('<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+    w(f"<title>{e(model['title'])}</title><style>{CSS}</style></head><body>")
+    ids_note = ("real Prolific ids: for the research team only" if model["ids"] == "real"
+                else "tokens: safe to share and to discuss with an agent")
+    w(f"<header><h1>{e(model['title'])}</h1>")
+    run = f' Run on {e(model["run_date"])}.' if model.get("run_date") else ""
+    w(f'<p class="lead">{model["n_screened"]} participants screened, <strong>{model["n_flagged"]} flagged</strong>. '
+      f'Ids on this page are {ids_note}.{run}</p>')
+    w(f'<p class="meta">{e(model["run_line"])}</p></header>')
+    w(f'<p class="intro">{e(model["intro"])}</p>')
+    w(f'<section id="overview"><h2>Flagged participants ({model["n_flagged"]})</h2>')
+    if model["flagged"]:
+        w('<p class="tools"><button type="button" onclick="toggleAll(true)">Expand all details</button> '
+          '<button type="button" onclick="toggleAll(false)">Collapse all</button></p>')
+        w('<table class="overview"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th><th>Strong patterns seen</th>'
+          '<th>Connected to</th></tr></thead><tbody>')
+        for c in model["flagged"]:
+            chips = " ".join(f'<span class="chip strong">{e(s["title"])}</span>' for s in c["strong"])
+            links = ", ".join(ref(k) for k in c["linked"])
+            w(f'<tr><td><a href="#p-{e(c["key"])}"><code>{e(c["label"])}</code></a></td><td>{e(c["study"])}</td>'
+              f'<td>{e(c["arm"])}</td><td>{chips}</td><td>{links}</td></tr>')
+        w("</tbody></table>")
+    else:
+        w('<p class="none">No participant is flagged in this pull: no strong pattern was seen.</p>')
+    w("</section>")
+    for c in model["flagged"]:
+        w(f'<article class="card" id="p-{e(c["key"])}">')
+        cohort = c["label"][len(c["key"]):].strip()
+        w(f'<h2><code>{e(c["key"])}</code> <span class="cohort">{e(cohort)}</span></h2>')
+        bits = [f"Study {c['study']}" if c["study"] else "", f"Arm {c['arm']}" if c["arm"] else "",
+                ", ".join(c["browsers"]), n_of(c["n_strong"], "strong pattern")]
+        w(f'<p class="meta">{e(" · ".join(b for b in bits if b))}</p>')
+        for s in c["strong"]:
+            w('<div class="finding">')
+            w(f'<h3>{e(s["title"])} <span class="code">{e(s["id"])}</span></h3>')
+            w(f'<p class="headline">{e(s["headline"])}</p>')
+            if s["evidence"]:
+                w('<table class="evidence"><thead><tr><th>When (UTC)</th><th>What was seen</th><th>Source file</th></tr></thead><tbody>')
+                for when, what, file in s["evidence"]:
+                    w(f'<tr><td class="when">{e(when)}</td><td class="what">{e(what)}</td><td class="file">{e(file)}</td></tr>')
+                w("</tbody></table>")
+                if s["rows"] > len(s["evidence"]):   # rows, not count: M5 counts minutes, M3 sessions
+                    w(f'<p class="meta">{s["rows"]} in total; the first {len(s["evidence"])} are shown.</p>')
+            w(f'<p class="innocent">Also explained by: {e(s["innocent"])}</p>')
+            w("<details><summary>Rule and notes</summary>")
+            w(f'<p class="rule">{e(s["rule"])}</p>')
+            if s["notes"]:
+                w("<ul>" + "".join(f"<li>{e(n)}</li>" for n in s["notes"]) + "</ul>")
+            w("</details></div>")
+        if c["support"]:
+            w('<div class="support"><h3>Supporting patterns <span class="hint">(context only; they do not flag on their own)</span></h3><ul>')
+            for s in c["support"]:
+                extra = (" · with " + ", ".join(ref(k) for k in s["linked"])) if s["linked"] else ""
+                w(f'<li><span class="chip support">{e(s["title"])}</span> <span class="code">{e(s["id"])}</span> {e(s["line"])}{extra}</li>')
+            w("</ul></div>")
+        if c["linked"]:
+            w('<p class="links">Connected to: ' + ", ".join(ref(k) for k in c["linked"]) + "</p>")
+        w("</article>")
+    w('<section id="rest">')
+    if model["support_only"]:
+        n = model["n_support_only"]
+        w(f'<details><summary>{n_of(n, "participant")} showed only supporting patterns and {"is" if n == 1 else "are"} not flagged</summary>')
+        w('<p class="meta">Supporting patterns have an ordinary explanation more often than not. The CSV beside this report '
+          'carries every participant and every pattern.</p>')
+        w('<table class="rest"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th><th>Supporting patterns</th></tr></thead><tbody>')
+        for r in model["support_only"]:
+            w(f'<tr><td><code>{e(r["label"])}</code></td><td>{e(r["study"])}</td><td>{e(r["arm"])}</td><td>{e("; ".join(r["patterns"]))}</td></tr>')
+        w("</tbody></table></details>")
+    w(f'<p class="meta">{n_of(model["n_clean"], "participant")} showed nothing.</p></section>')
+    w('<section id="appendix"><details><summary>Appendix: every pattern checked, excluded signals, limitations</summary>')
+    w('<table class="catalogue"><thead><tr><th>Code</th><th>Strength</th><th>Pattern</th><th>Rule</th><th>Fired / screened</th></tr></thead><tbody>')
+    for s in model["catalogue"]:
+        extra = f' (not available for {s["missing"]})' if s["missing"] else ""
+        w(f'<tr><td><span class="code">{e(s["id"])}</span></td><td>{e(s["tier"])}</td>'
+          f'<td>{e(s["title"])}<br><span class="innocent">Also explained by: {e(s["innocent"])}</span></td>'
+          f'<td class="rule">{e(s["rule"])}</td><td>{s["fired"]} / {s["screened"]}{e(extra)}</td></tr>')
+    w("</tbody></table>")
+    w("<h3>Signals deliberately excluded</h3><ul>" + "".join(f"<li><strong>{e(n)}</strong>: {e(why)}.</li>" for n, why in model["excluded"]) + "</ul>")
+    w("<h3>Limitations</h3><ul>" + "".join(f"<li>{e(x)}</li>" for x in model["limitations"]) + "</ul>")
+    w("</details></section>")
+    w(f'<footer class="meta">fraudscreen {e(model["version"])}, run time {model["seconds"]:.0f} s.</footer>')
+    w(f"<script>{JS}</script></body></html>")
+    return "\n".join(out)
 
 
 def write_csv(path, results_by_key, participants):
@@ -145,14 +284,14 @@ def write_csv(path, results_by_key, participants):
             continue
         major, minor = _counts(res)
         row = {"participant": participant_label(p), "study": p.get("study", ""), "arm": p.get("arm", ""),
-               "major_count": major, "minor_count": minor}
+               "flagged": int(major > 0), "major_count": major, "minor_count": minor}
         for s in SIGNS:
             row[f"{s.id}_fired"] = int(res[s.id].fired)
             row[f"{s.id}_count"] = res[s.id].count
         row["linked"] = ";".join(sorted({k for s in SIGNS for k in res[s.id].linked}))
         rows.append((major, minor, row))
     rows.sort(key=lambda r: (-r[0], -r[1], r[2]["participant"]))
-    fields = ["participant", "study", "arm", "major_count", "minor_count"] + [f"{s.id}_{k}" for s in SIGNS for k in ("fired", "count")] + ["linked"]
+    fields = ["participant", "study", "arm", "flagged", "major_count", "minor_count"] + [f"{s.id}_{k}" for s in SIGNS for k in ("fired", "count")] + ["linked"]
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()

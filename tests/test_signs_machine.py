@@ -114,5 +114,23 @@ class MachineTests(unittest.TestCase):
             self.assertEqual(r[sid].notes, ["no status points"])
 
 
+
+class HeadlineTests(unittest.TestCase):
+    def test_m2_headline_names_the_other_participant(self):
+        pa = S.mk_participant(A, status=[S.mk_status(ts=T + i * 60, disks=(("bf5b9a96", 1022317891584),), displays=()) for i in range(5)])
+        pb = S.mk_participant(B, status=[S.mk_status(ts=T + 120 + i * 60, disks=(("bf5b9a96", 1022317891584),), displays=()) for i in range(5)])
+        r = score_machine(pa, Context([pa, pb], fleet_for(pa, pb), True))
+        self.assertEqual(r["M2"].headline, f"In the same running browser as {B}: 1 browser id reported by both within a minute")
+
+    def test_m1_headline_names_platform_other_and_overlap(self):
+        pa = S.mk_participant(A, status=[S.mk_status(ts=T, disks=(("d1", 256005632000),))])
+        pb = S.mk_participant(B, status=[S.mk_status(ts=T + 10 * 86400, disks=(("d2", 256005632000),))])
+        r = score_machine(pa, Context([pa, pb], fleet_for(pa, pb), True))
+        self.assertEqual(r["m1"].headline, f"Identical Windows hardware as {B}; status times do not overlap")
+        pc = S.mk_participant(B, status=[S.mk_status(ts=T, disks=(("d2", 256005632000),))])
+        r = score_machine(pa, Context([pa, pc], fleet_for(pa, pc), True))
+        self.assertEqual(r["m1"].headline, f"Identical Windows hardware as {B}; status times overlap")
+
+
 if __name__ == "__main__":
     unittest.main()

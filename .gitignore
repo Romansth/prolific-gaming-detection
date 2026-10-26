@@ -13,4 +13,6 @@ reports-team/*
 .redaction/
 *_redacted/
 *_screen_*.md
+*_screen_*.html
 *_screen_*.csv
+.DS_Store

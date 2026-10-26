@@ -30,7 +30,7 @@ class ToolingTests(unittest.TestCase):
         self.assertEqual(r["M3"].count, 2)
         self.assertIn("2 of 3 sessions", r["M3"].notes)
         self.assertTrue(r["m4"].fired)
-        self.assertTrue(any(n.startswith("ipcheck: 1 visits") for n in r["m4"].notes))
+        self.assertTrue(any(n.startswith("ipcheck: 1 visit, 1 day, typed 0") for n in r["m4"].notes))
 
     def test_m3_marketing_page_is_m4_not_m3(self):
         vs = [S.mk_visit("https://www.adspower.net/pricing", ts=T)]
@@ -50,6 +50,21 @@ class ToolingTests(unittest.TestCase):
               S.mk_visit("https://a.example/", ts=T + 86400 + 10, visit_id=3)]
         r = run(S.mk_participant(A, visits=vs))
         self.assertTrue(any(n.startswith("ipcheck: 2 visits, 2 days, typed 2, at session start 2") for n in r["m4"].notes))
+
+
+
+class HeadlineTests(unittest.TestCase):
+    def test_m3_headline_counts_sessions(self):
+        vs = [S.mk_visit(LAUNCH, ts=T, transition="auto_toplevel"), S.mk_visit("https://app.prolific.com/studies", ts=T + 2, visit_id=2),
+              S.mk_visit("https://b.example/", ts=T + 5000, visit_id=4)]
+        r = run(S.mk_participant(A, visits=vs))
+        self.assertEqual(r["M3"].headline, "Antidetect browser: the start.adspower.net launch page opened 1 of 2 browsing sessions")
+
+    def test_m4_headline_counts_visits_by_category(self):
+        vs = [S.mk_visit("https://whoer.net/", ts=T + i * 86400, visit_id=i + 1, transition="typed") for i in range(3)]
+        vs.append(S.mk_visit("https://temp-mail.org/en/", ts=T + 5, visit_id=9))
+        r = run(S.mk_participant(A, visits=vs))
+        self.assertEqual(r["m4"].headline, "4 visits to concealment-tool sites (ipcheck 3, tempmail 1): whoer.net, temp-mail.org")
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ happens inside this folder.
   `./screen.sh --data raw-data/<pull> --redact`. The screen itself refuses a `raw-data/` folder
   when `CLAUDECODE=1`. You may run it on a redacted folder
   (`python3 -m fraudscreen --data data-redacted/<pull>`, which writes
-  `reports/<pull>_screen_<date>_from-redacted.md` and never touches the scrubbed report), the
+  `reports/<pull>_screen_<date>_from-redacted.html` and never touches the scrubbed report), the
   tests, and `python3 -m tests.synth`.
 - When the user names a participant by a real Prolific id, identifier or e-mail in chat, run
   `python3 -m fraudscreen.lookup <value>` (it prints only the token), then search `reports/` and

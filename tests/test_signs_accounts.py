@@ -147,5 +147,21 @@ class OtherTests(unittest.TestCase):
         self.assertFalse(score_accounts(S.mk_participant(A, status=[S.mk_status()]), ctx(p))["m7"].fired)
 
 
+
+class HeadlineTests(unittest.TestCase):
+    def test_m1_headline_counts_pages_and_names_the_id(self):
+        p = S.mk_participant(A, visits=[
+            S.mk_visit(f"https://app.prolific.com/submissions/complete?cc=X&PROLIFIC_PID={B}", ts=T, visit_id=1),
+            S.mk_visit(f"https://x.qualtrics.com/jfe/form/SV_x?PROLIFIC_PID={B}", ts=T - 300, visit_id=2)])
+        r = score_accounts(p, ctx(p))
+        self.assertEqual(r["M1"].headline, f"2 study pages opened locally under another Prolific id: {B}")
+        pb = S.mk_participant(B, visits=[])
+        r = score_accounts(p, ctx(p, pb))
+        self.assertEqual(r["M1"].headline, f"2 study pages opened locally under another Prolific id: {B} (also enrolled in this pull)")
+        synced = S.mk_participant(A, visits=[S.mk_visit(f"https://app.prolific.com/submissions/complete?PROLIFIC_PID={B}", ts=T, is_local=False)])
+        self.assertEqual(score_accounts(synced, ctx(synced))["m2"].headline,
+                         f"1 study page synced in from another device under another Prolific id: {B}")
+
+
 if __name__ == "__main__":
     unittest.main()

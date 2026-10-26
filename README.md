@@ -31,14 +31,14 @@ with the Python already on the machine; nothing is downloaded or installed.
 
 That one command:
 
-- screens the raw data and writes `reports-team/oct-10_screen_<date>.md` and `.csv` (real ids);
+- screens the raw data and writes `reports-team/oct-10_screen_<date>.html` and `.csv` (real ids);
 - runs the redactor and writes `data-redacted/oct-10/` with `identifiers.csv`;
-- scrubs the report and CSV with the same key and writes `reports/oct-10_screen_<date>.md` and `.csv` (tokens).
+- scrubs the report and CSV with the same key and writes `reports/oct-10_screen_<date>.html` and `.csv` (tokens).
 
 Without `--redact` it screens whatever folder it is given (raw or already redacted) and writes
-one report; a screen of `data-redacted/<pull>` goes to `reports/<pull>_screen_<date>_from-redacted.md`
-so it never replaces the scrubbed report, and the signs that need raw data (M3, m12, the search
-patterns of m13) show as `n/a` there. A symlink under `raw-data/` works like a copied folder.
+one report; a screen of `data-redacted/<pull>` goes to `reports/<pull>_screen_<date>_from-redacted.html`
+so it never replaces the scrubbed report, and the two signs that need raw data (M3, m12) are marked not
+available in its appendix (m13 runs without its search patterns). A symlink under `raw-data/` works like a copied folder.
 Other options: `--out`, `--csv`, `--workers N`, `--arms arms.json`, `--min-visits 50`,
 `--exclude-pattern REGEX`, `--key-dir`, `--safe`. Exit codes: 0 report written, 2 bad input or the
 redactor refused, 3 nothing screenable.
@@ -70,27 +70,32 @@ guard (again after either file changes). The in-code refusal works without that 
 
 ## Reading the report
 
-The table lists every participant with at least one sign, rows sorted by the number of major
-signs, one column per sign, `✓` (or `✓n` with a count) where it fired, `n/a` where the sign
-cannot be evaluated on this data. Under the table, one section per participant gives, for each
-fired sign, the rule, up to five evidence rows (UTC time, value as stored, source file), the
-full count, notes, and a fixed innocent reading. Appendix A gives every sign's rule, with the
-thresholds the code applies (minimum visits, calendar days, observation minutes, the 20-participant
-minimum for fleet percentiles), and how many participants in this pull tripped it; Appendix B the signals deliberately excluded; Appendix C the
-limitations.
+The report is one HTML file; open it in a browser. It lists the participants that are flagged:
+those with at least one strong pattern, a pattern where gaming is more likely than not. The top
+table gives each flagged participant, the study and arm, the strong patterns seen, and the
+participants it is connected to. One card per flagged participant follows. For each strong
+pattern the card gives a one-sentence finding ("Device clock set to Africa/Nairobi on 10 days,
+100% of 18 observation minutes"), the evidence rows (UTC time, what was seen, source file), the
+ordinary explanation that would also produce it, and a collapsed "Rule and notes". Supporting
+patterns that also fired are listed under the card for context; they never flag anyone on their
+own. Below the cards, a collapsed table names the participants with supporting patterns only,
+and a collapsed appendix gives every pattern checked (code, rule, how many participants tripped
+it, how many it could not be evaluated for), the signals deliberately excluded, and the
+limitations. The CSV beside the report carries every participant, a `flagged` column, and one
+`_fired` / `_count` pair per pattern.
 
-Major signs (the proof bar): M1 second Prolific id used in the monitored browser; M2 two enrolled
-participants in one running browser; M3 antidetect browser; M4 Google routed sign-ins outside the
-US on two days a week apart; M5 device clock outside the US on 7+ days; M6 Chrome installed with a
-non-US locale.
+Strong patterns, the ones that flag: M1 second Prolific id used in the monitored browser; M2 two
+enrolled participants in one running browser; M3 antidetect browser; M4 Google routed sign-ins
+outside the US on two days a week apart; M5 device clock outside the US on 7+ days or half the
+observation minutes; M6 Chrome installed with a non-US locale.
 
-Minor signs (support): m1 same Windows/Linux hardware as another participant; m2 another id synced
-into the profile; m3 link-sharing; m4 concealment tool sites; m5 virtual machine or remote
-session; m6 account under 30 days old; m7 same id enrolled twice; m8 hours disagree with the
-clock; m9 timezone switches; m10 one identifier on two machines; m11 survey-only browser, fresh
-profile, typed study links; m12 shared mail identity (raw data only); m13 foreign-language
-interface and searches; m14 automated reloads; m15 chatbot during surveys; m16 one non-US sign-in
-episode; m17 a non-US clock for a day.
+Supporting patterns, context only: m1 same Windows/Linux hardware as another participant; m2
+another id synced into the profile; m3 link-sharing; m4 concealment tool sites; m5 virtual
+machine or remote session; m6 account under 30 days old; m7 same id enrolled twice; m8 hours
+disagree with the clock; m9 timezone switches; m10 one identifier on two machines; m11
+survey-only browser, fresh profile, typed study links; m12 shared mail identity (raw data only);
+m13 foreign-language interface and searches; m14 automated reloads; m15 chatbot during surveys;
+m16 one non-US sign-in episode; m17 a non-US clock for a day.
 
 ## What it cannot see
 

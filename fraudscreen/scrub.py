@@ -1,5 +1,7 @@
-"""Scrub a finished report (markdown or CSV text) with the redactor's key so it carries the same
-tokens as the redacted data; new tokens are appended to the shared lookup for reidentify."""
+"""Scrub the report with the redactor's key so it carries the same tokens as the redacted data:
+the CSV as text (scrub_text), the HTML through its data model (scrub_model), then an independent
+leak check (leaks). New tokens are appended to the shared lookup for reidentify."""
+import json
 import re
 from pathlib import Path
 
@@ -51,6 +53,53 @@ def scrub_text(text, key_dir, host_counts=None, prefix_counts=None, threshold=5,
         tokens.merge_lookup(lookup, tok.added)
         tokens.write_lookup(key_dir / "lookup.tsv", lookup)
     return out
+
+
+def scrub_model(model, key_dir, **kw):
+    """The report's data model with every string leaf scrubbed by scrub_text, one leaf per line
+    (a newline inside a leaf becomes a space), so the URL and whole-word rules see the same
+    boundaries as in the redacted data and the HTML is rendered from the result, never scrubbed.
+    The input is left as it is; a scrub that changes the line count is refused."""
+    leaves = []
+
+    def collect(o):
+        if isinstance(o, str):
+            leaves.append(re.sub(r"[\r\n]+", " ", o))
+        elif isinstance(o, list):
+            for x in o:
+                collect(x)
+        elif isinstance(o, dict):
+            for v in o.values():
+                collect(v)
+
+    collect(model)
+    scrubbed = scrub_text("\n".join(leaves), key_dir, **kw).split("\n") if leaves else []
+    if len(scrubbed) != len(leaves):
+        raise RuntimeError(f"scrub changed the line count ({len(leaves)} -> {len(scrubbed)}); no token-only report written")
+    it = iter(scrubbed)
+
+    def rebuild(o):
+        if isinstance(o, str):
+            return next(it)
+        if isinstance(o, list):
+            return [rebuild(x) for x in o]
+        if isinstance(o, dict):
+            return {k: rebuild(v) for k, v in o.items()}
+        return o
+
+    return rebuild(model)
+
+
+def leaks(model, source_model):
+    """(kind, value) hits of the redactor's independent leak scanner (privacy.leakcheck, which
+    shares no code with the scrub) over the scrubbed model's text: 24-hex runs, study identifiers,
+    e-mail addresses, and shorter runs or 8-hex prefixes that match an id of the source model.
+    Empty means nothing the scanner knows about survived the scrub."""
+    from privacy import leakcheck
+    data = json.dumps(model, ensure_ascii=False).encode("utf-8")
+    source = json.dumps(source_model, ensure_ascii=False).encode("utf-8")
+    hits = leakcheck.scan(data, leakcheck.collect(source), leakcheck.collect_prefixes(source))
+    return [(kind, value.decode("utf-8", "replace")) for kind, value in hits]
 
 
 def _stem(prefix):

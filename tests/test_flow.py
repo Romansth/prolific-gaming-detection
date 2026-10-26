@@ -36,16 +36,16 @@ class FlowTests(unittest.TestCase):
 
     def test_three_outputs(self):
         self.assertEqual(self.code, 0, self.stdout)
-        team = list((self.repo / "reports-team").glob("oct-10_screen_????-??-??.md"))
-        pub = list((self.repo / "reports").glob("oct-10_screen_????-??-??.md"))
+        team = list((self.repo / "reports-team").glob("oct-10_screen_????-??-??.html"))
+        pub = list((self.repo / "reports").glob("oct-10_screen_????-??-??.html"))
         self.assertEqual((len(team), len(pub)), (1, 1), self.stdout)
         self.assertTrue((self.repo / "data-redacted" / "oct-10" / "identifiers.csv").exists())
         self.assertTrue((self.repo / "raw-data" / ".redaction" / "key").exists())
         self.assertTrue(team[0].with_suffix(".csv").exists() and pub[0].with_suffix(".csv").exists())
 
     def test_team_report_has_real_ids_and_public_report_has_tokens(self):
-        team = next((self.repo / "reports-team").glob("oct-10_screen_????-??-??.md")).read_text()
-        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.md")).read_text()
+        team = next((self.repo / "reports-team").glob("oct-10_screen_????-??-??.html")).read_text()
+        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.html")).read_text()
         m1_pid = next(pid for pid, exp in self.expected.items() if exp == {"M1"})
         self.assertIn(m1_pid, team)
         self.assertNotIn(m1_pid, pub)
@@ -53,15 +53,17 @@ class FlowTests(unittest.TestCase):
         self.assertIn("pid_", pub)
         self.assertIn("(WEIb)", pub)
         self.assertNotIn("shared-run-id", pub)        # M2 evidence names a storage id: a dev token in the data
-        self.assertRegex(pub, r"id dev_[0-9a-f]{16}:")
+        self.assertRegex(pub, r"dev_[0-9a-f]{16}")
         csv_pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.csv")).read_text()
         self.assertEqual(HEX24.findall(csv_pub), [])
-        # same shape: both reports list the same number of participants
-        self.assertEqual(team.count("\n### "), pub.count("\n### "))
+        # same shape: both reports carry the same number of cards
+        self.assertEqual(team.count('class="card"'), pub.count('class="card"'))
+        self.assertIn("tokens: safe to share", pub)
+        self.assertIn("real Prolific ids", team)
 
     def test_lookup_maps_real_id_to_the_token_in_the_public_report(self):
         m1_pid = next(pid for pid, exp in self.expected.items() if exp == {"M1"})
-        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.md")).read_text()
+        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.html")).read_text()
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = lookup_main([m1_pid, "--key-dir", str(self.repo / "raw-data" / ".redaction")])
@@ -77,19 +79,19 @@ class FlowTests(unittest.TestCase):
         self.assertIn(token, buf.getvalue())
 
     def test_redacted_mode_screen_gets_its_own_file_name(self):
-        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.md"))
+        pub = next((self.repo / "reports").glob("oct-10_screen_????-??-??.html"))
         before = pub.read_bytes()
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = main(["--data", str(self.repo / "data-redacted" / "oct-10"), "--workers", "2"])
         self.assertEqual(code, 0, buf.getvalue())
         self.assertEqual(pub.read_bytes(), before)
-        extra = list((self.repo / "reports").glob("oct-10_screen_*_from-redacted.md"))
+        extra = list((self.repo / "reports").glob("oct-10_screen_*_from-redacted.html"))
         self.assertEqual(len(extra), 1, buf.getvalue())
         md = extra[0].read_text()
         self.assertIn("Mode: redacted", md)
-        self.assertIn("skipped: no_prolific_id 1", md.split("\n")[2])   # the internal id carries no pid token
-        self.assertIn(f"Installs: {len(self.expected) + 3}.", md.split("\n")[2])   # same count as the raw screen: case variants merged through the install column
+        self.assertIn("skipped: no_prolific_id 1", md)   # the internal id carries no pid token
+        self.assertIn(f"Installs: {len(self.expected) + 3}.", md)   # same count as the raw screen: case variants merged through the install column
         self.assertNotIn(" ()", md)
 
     def test_lookup_rejects_other_values(self):

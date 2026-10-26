@@ -165,5 +165,37 @@ class LocationTests(unittest.TestCase):
         self.assertEqual(notes, ["US consumer sites visited: 2", "travel sites within 3 days of a location hit: 1"])
 
 
+
+class HeadlineTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = tz.USE_ZONEINFO
+        tz.USE_ZONEINFO = False
+
+    def tearDown(self):
+        tz.USE_ZONEINFO = self._saved
+
+    def test_strong_location_headlines(self):
+        vs = [S.mk_visit("https://accounts.google.co.ke/accounts/SetSID?ssdc=1", ts=T),
+              S.mk_visit("https://accounts.google.co.ke/accounts/SetSID?ssdc=1", ts=T + 12 * DAY, visit_id=2)]
+        r = run(S.mk_participant(A, visits=vs, status=[S.mk_status()]))
+        self.assertEqual(r["M4"].headline, "Google sign-ins routed through google.co.ke on 2 days (2026-09-14 and 2026-09-26)")
+        st = [S.mk_status(ts=T + i * DAY, tz="Africa/Nairobi") for i in range(8)]
+        r = run(S.mk_participant(A, status=st))
+        self.assertEqual(r["M5"].headline, "Device clock set to Africa/Nairobi on 8 days, 100% of 8 observation minutes")
+        r = run(S.mk_participant(A, visits=[S.mk_visit("https://www.google.com/search?q=weather&rlz=1C1ONGR_enVE1180VE1180", ts=T)]))
+        self.assertEqual(r["M6"].headline, "Chrome installed with a VE locale (1 search page carries the install code)")
+        one = run(S.mk_participant(A, visits=[S.mk_visit("https://accounts.google.com.ng/accounts/SetSID?ssdc=1", ts=T)], status=[S.mk_status()]))
+        self.assertEqual(one["m16"].headline, "Google sign-ins routed through google.com.ng on 1 day (2026-09-14)")
+
+    def test_m8_headline_is_the_share_sentence_not_the_histogram(self):
+        base = T - (T % 86400)
+        vs = [S.mk_visit(f"https://news.example/n{i}", ts=base + (i % 10) * 86400 + 6 * 3600 + (i % 3) * 3600 + (i * i * 131) % 3400, visit_id=1000 + i)
+              for i in range(100)]
+        r = run(S.mk_participant(A, visits=vs, status=[S.mk_status()]))
+        self.assertTrue(r["m8"].fired)
+        self.assertTrue(r["m8"].headline.startswith("100% of 100 visits fall at 01:00-05:00 on the reported America/New_York clock; a UTC"))
+        self.assertIn("clock would put 0% there", r["m8"].headline)
+
+
 if __name__ == "__main__":
     unittest.main()

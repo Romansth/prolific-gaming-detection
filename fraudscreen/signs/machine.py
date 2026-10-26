@@ -4,7 +4,7 @@ machines."""
 import re
 from collections import Counter, defaultdict
 
-from fraudscreen.signs import Evidence, SignResult, fmt_utc
+from fraudscreen.signs import Evidence, SignResult, fmt_utc, join_and, n_of
 
 _VM_RE = re.compile(r"QEMU|KVM|VMware|Virtual|Hyper-V|VirtualBox|Xen|Parallels", re.I)
 FIXED_DISK_MIN = 2 ** 31
@@ -66,6 +66,9 @@ def score_machine(p, ctx):
             if pair:
                 r["M2"].add(Evidence(fmt_utc(pair[0]), f"id {tid}: this {fmt_utc(pair[0])} and {other} {fmt_utc(pair[1])} within a minute ({len(ts)} vs {len(ots)} pts)", ""))
                 r["M2"].link(other)
+    if r["M2"].fired:
+        r["M2"].headline = (f"In the same running browser as {join_and(r['M2'].linked)}: "
+                            f"{n_of(r['M2'].count, 'browser id')} reported by both within a minute")
     # m1: shared hardware key
     keys = Counter()
     spans = {}
@@ -75,6 +78,7 @@ def score_machine(p, ctx):
             keys[k] += 1
             lo, hi = spans.get(k, (s.ts, s.ts))
             spans[k] = (min(lo, s.ts), max(hi, s.ts))
+    m1_others, m1_overlap, m1_plat = [], False, ""
     for k, n in keys.most_common():
         others = ctx.fleet.hw_keys.get(k, set()) - {own}
         for other in sorted(others):
@@ -89,6 +93,12 @@ def score_machine(p, ctx):
             r["m1"].add(Evidence(fmt_utc(lo), f"{k}: this {fmt_utc(lo)}..{fmt_utc(hi)} ({n} pts); {other} " + (f"{fmt_utc(olo)}..{fmt_utc(ohi)}" if olo else "n/a"), ""))
             r["m1"].link(other)
             r["m1"].notes.append(f"{other}: spans overlap: {'yes' if overlap else 'no'}")
+            m1_others.append(other)
+            m1_overlap = m1_overlap or overlap
+            m1_plat = m1_plat or {"Win": "Windows"}.get(k.split("|")[0], k.split("|")[0])
+    if r["m1"].fired:
+        r["m1"].headline = (f"Identical {m1_plat} hardware as {join_and(sorted(set(m1_others)))}; "
+                            f"status times {'overlap' if m1_overlap else 'do not overlap'}")
     # m5: VM strings, generic displays, display churn
     for s in status:
         if _VM_RE.search(s.cpu):
