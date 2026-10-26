@@ -6,6 +6,7 @@ parse."""
 import csv
 import html
 import re
+from collections import Counter
 
 from fraudscreen.signs import SIGNS, n_of
 
@@ -90,6 +91,28 @@ def run_line(meta):
             f"Dates: {meta.get('date_range', '')}. Tool version {meta.get('version', '')}, run time {meta.get('seconds', 0):.0f} s.")
 
 
+def _warnings(meta):
+    """Lines for the banner when the pull looks half-read: any file not read or not parsed, more
+    than 5 % of visits without a time, more than 10 % of participants without a device record."""
+    out = []
+    # junk entries (AppleDouble shadows, __MACOSX members) carry no data: a Mac-zipped pull is healthy
+    sk = {k: v for k, v in (meta.get("skipped_files") or {}).items() if k != "junk"}
+    if sk:
+        out.append(f"{n_of(sum(sk.values()), 'file')} not read ({_skipped(sk)}): the screen never saw them; check what they are "
+                   "and re-export the identifiers they belong to.")
+    n_bad = meta.get("unreadable") or 0
+    if n_bad:
+        out.append(f"{n_of(n_bad, 'file')} truncated or not valid JSON: re-export {'it' if n_bad == 1 else 'them'}.")
+    visits, no_time = meta.get("visits"), meta.get("no_time") or 0
+    if visits is not None and visits + no_time and no_time / (visits + no_time) > 0.05:
+        out.append(f"{no_time / (visits + no_time):.0%} of visits carry no time and were dropped; the timing checks ran on the rest.")
+    n, no_status = meta.get("participants") or 0, meta.get("no_status") or 0
+    if n and no_status / n > 0.10:
+        out.append(f"{no_status} of {n} participants have no device records, so the hardware, clock and running-browser "
+                   "checks could not run for them.")
+    return out
+
+
 def build_model(results_by_key, participants, fleet, meta):
     """Plain data (str, int, float, bool, None, list, dict) for render_html and scrub_model: the
     flagged participants (at least one strong sign) as cards, the support-only participants as a
@@ -126,6 +149,7 @@ def build_model(results_by_key, participants, fleet, meta):
     rows = [dict(key=p["key"], label=participant_label(p), study=p.get("study", ""), arm=p.get("arm", ""),
                  patterns=[s.title for s in SUPPORT if res[s.id].fired]) for p, res, _ in support_only]
     n_screened = meta.get("participants", len(participants))
+    studies = Counter((c["study"] or "?") for _, c in cards)   # cards only: the chips sit under the flagged heading
     catalogue = []
     for s in SIGNS:
         fired = sum(1 for res in results_by_key.values() if res[s.id].fired)
@@ -138,7 +162,8 @@ def build_model(results_by_key, participants, fleet, meta):
                  intro=INTRO, flagged=[c for _, c in cards], support_only=rows, catalogue=catalogue,
                  excluded=[list(x) for x in EXCLUDED_SIGNALS], limitations=list(LIMITATIONS),
                  version=str(meta.get("version", "")), seconds=float(meta.get("seconds", 0) or 0),
-                 run_date=str(meta.get("run_date", "")))
+                 run_date=str(meta.get("run_date", "")), warnings=_warnings(meta),
+                 studies=[[k, n] for k, n in sorted(studies.items())])
     return _mask(model)
 
 
@@ -170,10 +195,27 @@ details{margin:6px 0}summary{cursor:pointer;color:var(--muted);font-size:14px}de
 .support h3{color:var(--muted);font-weight:600}.hint{font-weight:400}.support ul{margin:4px 0;padding-left:20px}.support li{margin:3px 0;font-size:14px;color:var(--muted)}
 .links{margin:10px 0 0}.tools{margin:6px 0 10px}button{font:13px inherit;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:var(--btn);color:var(--fg);cursor:pointer}
 .none{padding:12px;border:1px dashed var(--line);border-radius:8px}
+.banner{background:#fff4d6;border:1px solid #e6c77a;color:#5b4300;border-radius:8px;padding:10px 14px;margin:12px auto;max-width:1100px}
+.banner ul{margin:6px 0 0;padding-left:20px}
+@media (prefers-color-scheme:dark){.banner{background:#3a2f12;border-color:#7a6224;color:#f3dfa3}}
+.summary{margin:0 0 8px}.summary .chip b{font-weight:700;margin-left:2px}
+.chip.study{cursor:pointer;background:var(--btn);color:var(--fg);border-color:var(--line);font:inherit;font-size:13px}
+.chip.study.on{background:var(--link);color:#fff;border-color:var(--link)}
+.scroll{overflow-x:auto}
+body:not(.files) .evidence .file{display:none}
+.copy{margin-left:8px;font-size:12px;padding:2px 8px;vertical-align:middle}
+.top{margin:10px 0 0;font-size:13px}
+.tools label{margin-left:12px;font-size:14px;color:var(--muted)}
 footer{margin-top:28px}
 @media print{.tools{display:none}.card{break-inside:avoid}body{padding:0}}
 """
-JS = "function toggleAll(o){document.querySelectorAll('details').forEach(function(d){d.open=o;});}"
+JS = """function toggleAll(o){document.querySelectorAll('details').forEach(function(d){d.open=o;});}
+function filterStudy(b){var s=b.dataset.filter;document.querySelectorAll('[data-study]').forEach(function(x){x.hidden=!!s&&x.dataset.study!==s;});
+document.querySelectorAll('.chip.study').forEach(function(c){c.classList.toggle('on',c.dataset.filter===s);});}
+function copyId(b){var reset=function(ms){setTimeout(function(){b.textContent='Copy id';},ms);};
+var done=function(){b.textContent='Copied';reset(1200);};var fail=function(){b.textContent='Select the id';reset(1600);};
+if(!navigator.clipboard){fail();return;}navigator.clipboard.writeText(b.dataset.copy).then(done,fail);}
+function showFiles(c){document.body.classList.toggle('files',c.checked);}"""
 
 
 def _e(s):
@@ -190,6 +232,13 @@ def render_html(model):
     def ref(k):   # a link when the participant has a card, plain text otherwise
         return f'<a href="#p-{e(k)}"><code>{e(k)}</code></a>' if k in flagged_keys else f"<code>{e(k)}</code>"
 
+    def linkify(text):   # escaped text with every flagged id turned into a link to its card
+        h = e(text)
+        for k in flagged_keys:
+            if e(k) in h:
+                h = h.replace(e(k), ref(k))
+        return h
+
     w("<!doctype html>")
     w('<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
     w(f"<title>{e(model['title'])}</title><style>{CSS}</style></head><body>")
@@ -200,38 +249,52 @@ def render_html(model):
     w(f'<p class="lead">{model["n_screened"]} participants screened, <strong>{model["n_flagged"]} flagged</strong>. '
       f'Ids on this page are {ids_note}.{run}</p>')
     w(f'<p class="meta">{e(model["run_line"])}</p></header>')
+    if model.get("warnings"):
+        w('<div class="banner"><strong>Check this pull before trusting the page.</strong><ul>'
+          + "".join(f"<li>{e(x)}</li>" for x in model["warnings"]) + "</ul></div>")
     w(f'<p class="intro">{e(model["intro"])}</p>')
     w(f'<section id="overview"><h2>Flagged participants ({model["n_flagged"]})</h2>')
     if model["flagged"]:
+        counts = [(s["title"], s["fired"]) for s in model["catalogue"] if s["tier"] == "strong" and s["fired"]]
+        w('<p class="summary">' + " ".join(f'<span class="chip strong">{e(t)} <b>{n}</b></span>' for t, n in counts) + "</p>")
         w('<p class="tools"><button type="button" onclick="toggleAll(true)">Expand all details</button> '
-          '<button type="button" onclick="toggleAll(false)">Collapse all</button></p>')
-        w('<table class="overview"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th><th>Strong patterns seen</th>'
-          '<th>Connected to</th></tr></thead><tbody>')
+          '<button type="button" onclick="toggleAll(false)">Collapse all</button>'
+          '<label><input type="checkbox" id="showfiles" onchange="showFiles(this)" autocomplete="off"> Show source files</label></p>')
+        studies = model.get("studies") or []
+        if len(studies) > 1:
+            total = sum(n for _, n in studies)
+            w('<p class="studies"><button type="button" class="chip study on" onclick="filterStudy(this)" data-filter="">'
+              f'All ({total})</button> ' + " ".join(f'<button type="button" class="chip study" onclick="filterStudy(this)" '
+                                                   f'data-filter="{e(k)}">{e(k)} ({n})</button>' for k, n in studies) + "</p>")
+        w('<div class="scroll"><table class="overview"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th>'
+          '<th>Strong patterns seen</th><th>Connected to</th></tr></thead><tbody>')
         for c in model["flagged"]:
             chips = " ".join(f'<span class="chip strong">{e(s["title"])}</span>' for s in c["strong"])
             links = ", ".join(ref(k) for k in c["linked"])
-            w(f'<tr><td><a href="#p-{e(c["key"])}"><code>{e(c["label"])}</code></a></td><td>{e(c["study"])}</td>'
-              f'<td>{e(c["arm"])}</td><td>{chips}</td><td>{links}</td></tr>')
-        w("</tbody></table>")
+            w(f'<tr data-study="{e(c["study"] or "?")}"><td><a href="#p-{e(c["key"])}"><code>{e(c["label"])}</code></a></td>'
+              f'<td>{e(c["study"])}</td><td>{e(c["arm"])}</td><td>{chips}</td><td>{links}</td></tr>')
+        w("</tbody></table></div>")
     else:
         w('<p class="none">No participant is flagged in this pull: no strong pattern was seen.</p>')
     w("</section>")
     for c in model["flagged"]:
-        w(f'<article class="card" id="p-{e(c["key"])}">')
+        w(f'<article class="card" id="p-{e(c["key"])}" data-study="{e(c["study"] or "?")}">')
         cohort = c["label"][len(c["key"]):].strip()
-        w(f'<h2><code>{e(c["key"])}</code> <span class="cohort">{e(cohort)}</span></h2>')
+        w(f'<h2><code>{e(c["key"])}</code> <span class="cohort">{e(cohort)}</span> '
+          f'<button type="button" class="copy" data-copy="{e(c["key"])}" onclick="copyId(this)">Copy id</button></h2>')
         bits = [f"Study {c['study']}" if c["study"] else "", f"Arm {c['arm']}" if c["arm"] else "",
                 ", ".join(c["browsers"]), n_of(c["n_strong"], "strong pattern")]
         w(f'<p class="meta">{e(" · ".join(b for b in bits if b))}</p>')
         for s in c["strong"]:
             w('<div class="finding">')
             w(f'<h3>{e(s["title"])} <span class="code">{e(s["id"])}</span></h3>')
-            w(f'<p class="headline">{e(s["headline"])}</p>')
+            w(f'<p class="headline">{linkify(s["headline"])}</p>')
             if s["evidence"]:
-                w('<table class="evidence"><thead><tr><th>When (UTC)</th><th>What was seen</th><th>Source file</th></tr></thead><tbody>')
+                w('<div class="scroll"><table class="evidence"><thead><tr><th>When (UTC)</th><th>What was seen</th>'
+                  '<th class="file">Source file</th></tr></thead><tbody>')
                 for when, what, file in s["evidence"]:
                     w(f'<tr><td class="when">{e(when)}</td><td class="what">{e(what)}</td><td class="file">{e(file)}</td></tr>')
-                w("</tbody></table>")
+                w("</tbody></table></div>")
                 if s["rows"] > len(s["evidence"]):   # rows, not count: M5 counts minutes, M3 sessions
                     w(f'<p class="meta">{s["rows"]} in total; the first {len(s["evidence"])} are shown.</p>')
             w(f'<p class="innocent">Also explained by: {e(s["innocent"])}</p>')
@@ -248,6 +311,7 @@ def render_html(model):
             w("</ul></div>")
         if c["linked"]:
             w('<p class="links">Connected to: ' + ", ".join(ref(k) for k in c["linked"]) + "</p>")
+        w('<p class="top"><a href="#overview">Back to overview</a></p>')
         w("</article>")
     w('<section id="rest">')
     if model["support_only"]:
@@ -255,19 +319,20 @@ def render_html(model):
         w(f'<details><summary>{n_of(n, "participant")} showed only supporting patterns and {"is" if n == 1 else "are"} not flagged</summary>')
         w('<p class="meta">Supporting patterns have an ordinary explanation more often than not. The CSV beside this report '
           'carries every participant and every pattern.</p>')
-        w('<table class="rest"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th><th>Supporting patterns</th></tr></thead><tbody>')
+        w('<div class="scroll"><table class="rest"><thead><tr><th>Participant</th><th>Study</th><th>Arm</th><th>Supporting patterns</th></tr></thead><tbody>')
         for r in model["support_only"]:
-            w(f'<tr><td><code>{e(r["label"])}</code></td><td>{e(r["study"])}</td><td>{e(r["arm"])}</td><td>{e("; ".join(r["patterns"]))}</td></tr>')
-        w("</tbody></table></details>")
+            w(f'<tr data-study="{e(r["study"] or "?")}"><td><code>{e(r["label"])}</code></td><td>{e(r["study"])}</td><td>{e(r["arm"])}</td>'
+              f'<td>{e("; ".join(r["patterns"]))}</td></tr>')
+        w("</tbody></table></div></details>")
     w(f'<p class="meta">{n_of(model["n_clean"], "participant")} showed nothing.</p></section>')
     w('<section id="appendix"><details><summary>Appendix: every pattern checked, excluded signals, limitations</summary>')
-    w('<table class="catalogue"><thead><tr><th>Code</th><th>Strength</th><th>Pattern</th><th>Rule</th><th>Fired / screened</th></tr></thead><tbody>')
+    w('<div class="scroll"><table class="catalogue"><thead><tr><th>Code</th><th>Strength</th><th>Pattern</th><th>Rule</th><th>Fired / screened</th></tr></thead><tbody>')
     for s in model["catalogue"]:
         extra = f' (not available for {s["missing"]})' if s["missing"] else ""
         w(f'<tr><td><span class="code">{e(s["id"])}</span></td><td>{e(s["tier"])}</td>'
           f'<td>{e(s["title"])}<br><span class="innocent">Also explained by: {e(s["innocent"])}</span></td>'
           f'<td class="rule">{e(s["rule"])}</td><td>{s["fired"]} / {s["screened"]}{e(extra)}</td></tr>')
-    w("</tbody></table>")
+    w("</tbody></table></div>")
     w("<h3>Signals deliberately excluded</h3><ul>" + "".join(f"<li><strong>{e(n)}</strong>: {e(why)}.</li>" for n, why in model["excluded"]) + "</ul>")
     w("<h3>Limitations</h3><ul>" + "".join(f"<li>{e(x)}</li>" for x in model["limitations"]) + "</ul>")
     w("</details></section>")

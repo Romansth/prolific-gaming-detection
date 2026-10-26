@@ -118,6 +118,73 @@ class ReportTests(unittest.TestCase):
         html = render_html(build_model(self.results, self.parts, self.fleet, META))
         self.assertIn("Run on 2026-10-26", html)
 
+    def test_warning_banner_names_what_was_not_read(self):
+        meta = dict(META, skipped_files={"corrupt_zip": 1, "unparsed_name": 2}, unreadable=2, no_time=10, visits=90, no_status=3, participants=20)
+        html = render_html(build_model(self.results, self.parts, self.fleet, meta))
+        self.assertIn("Check this pull before trusting the page", html)
+        self.assertIn("3 files not read (corrupt_zip 1, unparsed_name 2)", html)
+        self.assertIn("2 files truncated or not valid JSON", html)
+        self.assertIn("10% of visits carry no time", html)
+        self.assertIn("3 of 20 participants have no device records", html)
+
+    def test_banner_ignores_junk_entries(self):
+        """AppleDouble shadows and __MACOSX members carry no data; a Mac-zipped pull is healthy."""
+        html = render_html(build_model(self.results, self.parts, self.fleet, dict(META, skipped_files={"junk": 3})))
+        self.assertNotIn("Check this pull", html)
+        html = render_html(build_model(self.results, self.parts, self.fleet, dict(META, skipped_files={"corrupt_zip": 1, "junk": 2})))
+        self.assertIn("1 file not read (corrupt_zip 1)", html)
+
+    def test_no_banner_on_a_clean_pull(self):
+        html = render_html(build_model(self.results, self.parts, self.fleet, dict(META, visits=100, no_time=4, no_status=0)))
+        self.assertNotIn("Check this pull", html)
+
+    def test_study_chips_only_when_flagged_cards_span_several_studies(self):
+        results = dict(self.results, A=None); del results["A"]
+        results[A] = res(["M4"]); results[C] = res(["m4"])              # A (WEI) and B (AIM-EC) flagged, C (WEI) support only
+        html = render_html(build_model(results, self.parts, self.fleet, META))
+        self.assertIn('data-filter="">All (2)<', html)                  # the same 2 as "Flagged participants (2)"
+        self.assertIn("Flagged participants (2)", html)
+        self.assertIn('data-filter="AIM-EC">AIM-EC (1)<', html)
+        self.assertIn('data-filter="WEI">WEI (1)<', html)
+        self.assertIn(f'<article class="card" id="p-{B}" data-study="AIM-EC">', html)
+        self.assertIn('<tr data-study="WEI">', html)                     # the support-only row filters too
+        one = render_html(build_model(self.results, self.parts, self.fleet, META))   # one flagged study, one support-only study
+        self.assertNotIn('class="chip study"', one)
+
+    def test_pattern_summary_line(self):
+        y, x, z = "65000000000000000000000a", "65000000000000000000000b", "65000000000000000000000c"
+        parts = [S.mk_participant(k, status=[S.mk_status()]) for k in (y, x, z)]
+        results = {y: res(["M2"], linked={"M2": z}), x: res(["M4"]), z: res(["M2"], linked={"M2": y})}
+        html = render_html(build_model(results, parts, self.fleet, META))
+        self.assertIn("Two enrolled participants in one running browser <b>2</b>", html)
+        self.assertIn("Google routed sign-ins outside the US, persistently <b>1</b>", html)
+        self.assertNotIn("Antidetect browser <b>", html)
+
+    def test_cards_carry_copy_button_and_back_link(self):
+        html = render_html(build_model(self.results, self.parts, self.fleet, META))
+        self.assertIn(f'data-copy="{B}"', html)
+        self.assertIn('href="#overview">Back to overview</a>', html)
+
+    def test_headline_links_the_other_flagged_participant(self):
+        y, x, z = "65000000000000000000000a", "65000000000000000000000b", "65000000000000000000000c"
+        parts = [S.mk_participant(k, status=[S.mk_status()]) for k in (y, x, z)]
+        results = {y: res(["M2"], linked={"M2": z}, headline={"M2": f"In the same running browser as {z}: 1 browser id"}),
+                   x: res(["M4"], headline={"M4": f"not a card: {A}"}), z: res(["M2"], linked={"M2": y})}
+        html = render_html(build_model(results, parts, self.fleet, META))
+        self.assertIn(f'<p class="headline">In the same running browser as <a href="#p-{z}"><code>{z}</code></a>: 1 browser id</p>', html)
+        self.assertIn(f'<p class="headline">not a card: {A}</p>', html)
+
+    def test_source_file_column_behind_a_checkbox(self):
+        html = render_html(build_model(self.results, self.parts, self.fleet, META))
+        self.assertIn('<input type="checkbox" id="showfiles"', html)
+        self.assertIn("body:not(.files) .evidence .file", html)
+        self.assertIn('<th class="file">Source file</th>', html)
+
+    def test_tables_scroll_sideways(self):
+        html = render_html(build_model(self.results, self.parts, self.fleet, META))
+        self.assertIn('<div class="scroll"><table class="overview">', html)
+        self.assertIn(".scroll{overflow-x:auto}", html)
+
     def test_csv_columns(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d, "out.csv")

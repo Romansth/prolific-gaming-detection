@@ -79,9 +79,26 @@ catalogue and will not.
 - `fraudscreen/__main__.py`: report paths end in `.html`; the token-only report is
   `render_html(scrub_model(model))`.
 - Docs: README "Run" and "Reading the report", the two agent instruction files, `.gitignore`.
-- Version 0.2.0.
+- Version 0.2.0 (round 1); 0.3.0 after round 2.
 
 ## Not in scope
 
 No sign rule or threshold changes. No change to the redactor. No change to the CSV columns
 other than adding `flagged`.
+
+## Round 2 (2026-10-26, same day): ease of use
+
+Calls made in chat, built under `docs/superpowers/plans/2026-10-26-report-usability.md`:
+
+- `./screen.sh` alone picks the newest folder in the pull folder by modification time, runs with
+  `--redact` and opens the team page; `--open` does the opening after an explicit run. Inside an
+  agent session the zero-argument run resolves to the raw folder and is refused as before.
+- A banner above the intro fires on any file not read or truncated, on more than 5 % of visits
+  without a time, and on more than 10 % of participants without device records; each line says
+  what to re-export.
+- Study chips appear only when a pull has more than one study and filter the overview, the cards
+  and the support-only table together.
+- Reading aids: a per-pattern count line under the flagged heading, "Copy id" on each card, the
+  other participant's id in a headline linked to their card, the source-file column behind a
+  "Show source files" checkbox, "Back to overview" on each card, tables that scroll sideways on
+  narrow screens.

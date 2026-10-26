@@ -62,6 +62,10 @@ class EndToEndTests(unittest.TestCase):
             if not exp:
                 self.assertNotIn(pid, self.html, pid)
 
+    def test_banner_reports_the_truncated_file(self):
+        self.assertIn("Check this pull before trusting the page", self.html)
+        self.assertIn("1 file truncated or not valid JSON", self.html)
+
     def test_headlines_carry_specifics(self):
         for text in ("Device clock set to Africa/Nairobi on 10 days, 100% of 18 observation minutes", "Google sign-ins routed through google.co.ke on 2 days",
                      "Chrome installed with a VE locale", "start.adspower.net launch page opened 1 of",

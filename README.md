@@ -35,6 +35,9 @@ That one command:
 - runs the redactor and writes `data-redacted/oct-10/` with `identifiers.csv`;
 - scrubs the report and CSV with the same key and writes `reports/oct-10_screen_<date>.html` and `.csv` (tokens).
 
+`./screen.sh` with no arguments screens the newest pull folder from step 1 (by modification time),
+redacts, and opens the team page in the browser; `--open` opens the page after an explicit run.
+
 Without `--redact` it screens whatever folder it is given (raw or already redacted) and writes
 one report; a screen of `data-redacted/<pull>` goes to `reports/<pull>_screen_<date>_from-redacted.html`
 so it never replaces the scrubbed report, and the two signs that need raw data (M3, m12) are marked not
@@ -83,6 +86,12 @@ and a collapsed appendix gives every pattern checked (code, rule, how many parti
 it, how many it could not be evaluated for), the signals deliberately excluded, and the
 limitations. The CSV beside the report carries every participant, a `flagged` column, and one
 `_fired` / `_count` pair per pattern.
+
+A yellow box at the top appears when the pull looks half-read (files that did not open or parse,
+visits without a time, participants with no device record) and says what to re-export. With more
+than one study in the pull, chips above the table narrow the page to one study. Each card has a
+"Copy id" button and a "Back to overview" link; the source-file column of the evidence tables is
+hidden until "Show source files" is ticked.
 
 Strong patterns, the ones that flag: M1 second Prolific id used in the monitored browser; M2 two
 enrolled participants in one running browser; M3 antidetect browser; M4 Google routed sign-ins

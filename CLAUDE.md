@@ -19,7 +19,8 @@ happens inside this folder.
   always works.
 - The user runs the screen on raw data in their own terminal:
   `./screen.sh --data raw-data/<pull> --redact`. The screen itself refuses a `raw-data/` folder
-  when `CLAUDECODE=1`. You may run it on a redacted folder
+  when `CLAUDECODE=1`, and a bare `./screen.sh` (no `--data`, which targets the newest raw pull) is
+  refused too. You may run it on a redacted folder
   (`python3 -m fraudscreen --data data-redacted/<pull>`, which writes
   `reports/<pull>_screen_<date>_from-redacted.html` and never touches the scrubbed report), the
   tests, and `python3 -m tests.synth`.

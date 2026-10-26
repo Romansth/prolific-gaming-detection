@@ -1,10 +1,12 @@
-"""python -m fraudscreen --data <folder> [--out report.html] [--csv file.csv] [--redact] ..."""
+"""python -m fraudscreen [--data <folder>] [--out report.html] [--csv file.csv] [--redact] [--open] ...
+Without --data: the newest pull in this checkout, redacted, and the team page opened."""
 import argparse
 import datetime as dt
 from collections import Counter
 import os
 import sys
 import time
+import webbrowser
 from pathlib import Path
 
 from fraudscreen import __version__
@@ -57,7 +59,17 @@ except ImportError:  # pragma: no cover
     RAW_FOLDER_NAMES = ("raw-data",)
 
 
-SHARE_DIR = Path(__file__).resolve().parents[1] / "reports"   # this checkout's shareable folder
+REPO_ROOT = Path(__file__).resolve().parents[1]   # this checkout; tests point it at a temporary repo
+SHARE_DIR = REPO_ROOT / "reports"                  # this checkout's shareable folder
+
+
+def newest_pulls(raw_dir):
+    """Pull folders under the raw folder, oldest first by modification time, so the last one is the
+    pull most recently copied in; dot-folders (the key folder) are not pulls."""
+    if not raw_dir.is_dir():
+        return []
+    pulls = [d for d in raw_dir.glob("*") if d.is_dir() and not d.name.startswith(".")]
+    return sorted(pulls, key=lambda d: d.stat().st_mtime)
 
 
 def _in_shareable_folder(path, repo=None):
@@ -100,10 +112,15 @@ def score_all(participants, fleet, raw_mode):
     return results
 
 
+def agent_session():
+    """Claude Code sets CLAUDECODE=1 in its shells, Codex sets CODEX_THREAD_ID and CODEX_SESSION_ID."""
+    return os.environ.get("CLAUDECODE") == "1" or bool(os.environ.get("CODEX_THREAD_ID")) or bool(os.environ.get("CODEX_SESSION_ID"))
+
+
 def refuse_inside_claude(folder):
     """The raw folder is out of bounds for a Claude Code or Codex session; the person runs the screen
-    on it. Claude Code sets CLAUDECODE=1 in its shells, Codex sets CODEX_THREAD_ID and CODEX_SESSION_ID."""
-    if os.environ.get("CLAUDECODE") != "1" and not os.environ.get("CODEX_THREAD_ID") and not os.environ.get("CODEX_SESSION_ID"):
+    on it."""
+    if not agent_session():
         return False
     p = Path(folder)   # the path as given and where it really points, so a symlink is no way around
     return any(part in RAW_FOLDER_NAMES for part in p.parts + p.resolve().parts)
@@ -111,17 +128,33 @@ def refuse_inside_claude(folder):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fraudscreen", description="Screen a folder of PDK exports for signs of participant gaming.")
-    ap.add_argument("--data", required=True, help="folder of per-identifier export files (json, or zips of them)")
+    ap.add_argument("--data", help="folder of per-identifier export files (json, or zips of them); without it, the newest "
+                    "pull folder in this checkout is screened with --redact and --open")
     ap.add_argument("--out", help="HTML report path (default: <folder>_screen_<date>.html, or reports/ in a repo layout)")
     ap.add_argument("--csv", help="csv path (default: next to the report)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--redact", action="store_true", help="run the privacy redactor first and screen the redacted copy")
+    ap.add_argument("--open", action="store_true", help="open the team report in the browser once written")
     ap.add_argument("--safe", help="where the redacted copy goes (default: <folder>_redacted, or data-redacted/<name> in a repo layout)")
     ap.add_argument("--key-dir", help="folder holding the redactor key and lookup (default: nearest .redaction/ above the data)")
     ap.add_argument("--arms", help="arms.json mapping configuration-hash prefixes to arm names")
     ap.add_argument("--min-visits", type=int, default=50, help="installs below this many visits do not set fleet percentiles")
     ap.add_argument("--exclude-pattern", action="append", default=None, help="regex for internal identifiers to skip (repeatable)")
     args = ap.parse_args(argv)
+    if not args.data:
+        if agent_session():   # before anything lists the raw folder: not even a pull's name may leave it
+            print("Refusing: without --data the screen targets the newest raw pull, which is out of bounds in a Claude Code "
+                  "or Codex session. Pass --data data-redacted/<pull>.")
+            return 2
+        pulls = newest_pulls(REPO_ROOT / RAW_FOLDER_NAMES[-1])
+        if not pulls:
+            print(f"No pull found under {RAW_FOLDER_NAMES[-1]}/: put a pull folder there, or pass --data.")
+            return 2
+        newest = pulls[-1]
+        when = dt.datetime.fromtimestamp(newest.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        others = ", ".join(p.name for p in reversed(pulls[:-1])) or "none"
+        print(f"Screening the newest pull: {newest.name} (modified {when}); also present: {others}. Pass --data to screen another.")
+        args.data, args.redact, args.open = str(newest), True, True
     t_start = time.time()
     # abspath, not resolve(): a pull symlinked under raw-data/ keeps the repo layout and the shared key
     folder = Path(os.path.abspath(os.path.expanduser(args.data)))
@@ -162,7 +195,8 @@ def main(argv=None):
     meta = dict(folder=folder.name, mode=mode, files=sum(len(i["files"]) for p in participants for i in p["installs"]),
                 installs=sum(len(p["installs"]) for p in participants), participants=len(participants), skipped=dict(skipped),
                 unreadable=sum(i["unreadable"] for i in installs.values()), skipped_files=dict(skipped_files),
-                no_time=sum(i.get("no_time", 0) for i in installs.values()),
+                no_time=sum(i.get("no_time", 0) for i in installs.values()), visits=n_visits,
+                no_status=sum(1 for p in participants if not any(i["status"] for i in p["installs"])),
                 date_range=f"{days[0]}..{days[-1]}" if days else "", version=__version__, seconds=time.time() - t_start, run_date=today,
                 arms_available=bool(arms))
     # where the first (unscrubbed) report goes: a raw screen carries real ids and belongs with the team
@@ -189,6 +223,8 @@ def main(argv=None):
     out.write_text(render_html(model), encoding="utf-8")
     write_csv(csv_path, results, participants)
     print(f"Report: {out}\nCSV: {csv_path}\nParticipants screened {len(participants)}, flagged {model['n_flagged']}, mode {mode}, {meta['seconds']:.0f} s.")
+    if args.open and not webbrowser.open(out.resolve().as_uri()):
+        print("No browser opened; the report path is above.")
     if not args.redact:
         return 0
     if not raw_mode:

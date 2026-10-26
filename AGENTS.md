@@ -23,8 +23,8 @@ file changes, change the other.
   always works.
 - The user runs the screen on raw data in their own terminal:
   `./screen.sh --data raw-data/<pull> --redact`. The screen itself refuses a `raw-data/` folder
-  inside an agent session (`CODEX_THREAD_ID` set, or `CLAUDECODE=1`). You may run it on a
-  redacted folder
+  inside an agent session (`CODEX_THREAD_ID` set, or `CLAUDECODE=1`), and a bare `./screen.sh`
+  (no `--data`, which targets the newest raw pull) is refused too. You may run it on a redacted folder
   (`python3 -m fraudscreen --data data-redacted/<pull>`, which writes
   `reports/<pull>_screen_<date>_from-redacted.html` and never touches the scrubbed report), the
   tests, and `python3 -m tests.synth`.
