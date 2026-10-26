@@ -2,7 +2,7 @@
 from collections import defaultdict
 
 from fraudscreen import hosts
-from fraudscreen.signs import Evidence, SignResult, evidence_from_visit, fmt_utc, n_of
+from fraudscreen.signs import SignResult, evidence_from_visit, fmt_utc, n_of
 
 SESSION_GAP_S = 1200
 M4_CATEGORIES = ("antidetect", "ipcheck", "vpn_account", "proxy", "remote", "sms", "tempmail", "generator")

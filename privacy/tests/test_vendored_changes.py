@@ -104,6 +104,18 @@ class RedactCliChangeTests(unittest.TestCase):
         self.assertFalse((self.tmp / "safe2").exists())
 
 
+class NulCsvTests(unittest.TestCase):
+    """Python 3.11 lets the csv module read NUL bytes, which 3.9 refused. A NUL means a damaged or
+    binary file, so the redactor refuses such a CSV on every version instead of copying it."""
+
+    def test_csv_with_a_nul_byte_is_refused(self):
+        from privacy.files import FileRedactor, Refused
+        stub = mock.Mock(scrubber=mock.Mock(scrub=lambda c: c))
+        with self.assertRaises(Refused) as cm:
+            FileRedactor._csv(stub, f"id,score\n{PID_A},3\x000\n", ",", io.StringIO())
+        self.assertIn("unparseable", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
 

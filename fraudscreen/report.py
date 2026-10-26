@@ -10,7 +10,7 @@ from collections import Counter
 
 from fraudscreen.signs import SIGNS, n_of
 
-# the team report carries real ids but never an address (the plan's "never e-mail addresses")
+# both copies of the report mask e-mail addresses; the team copy keeps real ids and URLs
 EMAIL_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}(?:@|%40)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 
 STRONG = [s for s in SIGNS if s.tier == "major"]

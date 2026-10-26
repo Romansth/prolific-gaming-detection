@@ -273,7 +273,7 @@ def build_folder(root, idents_out=None):
             vs.append(visit(ident, "https://chatgpt.com/c/abc", 3001 + 3 * i, ts=t0 + 60))
         vs.append(visit(ident, f"https://app.prolific.com/submissions/complete?cc=X&PROLIFIC_PID={pid}&SESSION_ID={sess}", 3002 + 3 * i, ts=t0 + 600))
     emit(ident, vs, statuses(idx)); expected[pid] = {"m15"}
-    # ---- cases from the 2026-10-21 review: each fired, or stayed silent, for the wrong reason ----
+    # ---- edge cases: each once fired, or stayed silent, for the wrong reason ----
     # M6: a hyphenated install locale (en-GB) was missed by the rlz pattern
     pid, ident, idx = participant()
     vs = news(ident, 50) + [visit(ident, "https://www.google.com/search?q=weather&rlz=1C1CHBF_en-GBGB917GB917", 2000, ts=T0)]

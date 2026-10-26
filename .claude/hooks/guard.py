@@ -23,7 +23,7 @@ import sys
 
 PRIVATE = re.compile(r"raw-data|reports-team|\.redaction|user_data_raw", re.I)
 ALLOWED_ROOTS = ("data-redacted", "reports", "fraudscreen", "privacy", "tests", "tools", "docs", ".claude", ".codex",
-                 ".superpowers", ".git", ".venv")
+                 ".git", ".venv")
 RECURSIVE = {"find", "rg", "tree", "du", "fd", "ag", "ack", "locate", "mdfind", "ugrep"}
 READERS = {"cat", "head", "tail", "less", "more", "wc", "cp", "mv", "zip", "tar", "unzip", "sort", "uniq", "cut",
            "awk", "sed", "python", "python3", "jq", "diff", "md5", "md5sum", "shasum", "open", "file", "strings"}

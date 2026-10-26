@@ -1,6 +1,7 @@
-"""Behaviours pinned by the whole-branch review: the data-boundary guard, scrub coverage, symlinked
-pulls, redacted-mode gaps, link-sharing mutuality, Edge-imported duplicates, scoring speed, scan
-tolerance, header counts, dead checks, missing US zones, e-mail masking."""
+"""Regression tests for bugs found in the first full audit of the screen: the data-boundary guard,
+report placement, scrub coverage, symlinked pulls, redacted-mode gaps, link-sharing mutuality,
+Edge-imported duplicates, scoring speed, scan tolerance, header counts, dead checks, missing US
+zones and e-mail masking."""
 import datetime as dt
 import io
 import json
@@ -48,7 +49,7 @@ def guard(tool, tool_input, cwd=None):
 
 
 class GuardTests(unittest.TestCase):
-    """C1: the hook must stop recursive reads from the repo root, not only calls naming the folders."""
+    """The hook must stop recursive reads from the repo root, not only calls naming the folders."""
 
     def test_named_folders_blocked_for_any_tool(self):
         self.assertEqual(guard("Read", {"file_path": "/x/raw-data/oct-10/a.json"})[0], 2)
@@ -238,7 +239,7 @@ class ReportPlacementTests(unittest.TestCase):
 
 
 class ScrubCoverageTests(unittest.TestCase):
-    """I1: everything the redactor tokenizes in the data is tokenized in the scrubbed report."""
+    """Everything the redactor tokenizes in the data is tokenized in the scrubbed report."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -300,7 +301,7 @@ class ScrubCoverageTests(unittest.TestCase):
 
 
 class SymlinkTests(unittest.TestCase):
-    """I2: a pull symlinked under raw-data/ keeps the repo layout and the shared key."""
+    """A pull symlinked under raw-data/ keeps the repo layout and the shared key."""
 
     def test_symlinked_pull_uses_repo_layout(self):
         with tempfile.TemporaryDirectory() as d:
@@ -325,7 +326,7 @@ class SymlinkTests(unittest.TestCase):
 
 
 class RedactedModeTests(unittest.TestCase):
-    """I3: internal ids skipped, raw-only signs not available, case variants merged, distinct report name."""
+    """Internal ids skipped, raw-only signs not available, case variants merged, distinct report name."""
 
     def test_token_without_pid_is_not_a_participant(self):
         idmap = {"ident_" + "a" * 16: ("", "", "", "ident_" + "a" * 16)}
@@ -359,7 +360,7 @@ class RedactedModeTests(unittest.TestCase):
 
 
 class LinkSharingTests(unittest.TestCase):
-    """I5: the mutual clause of m3 needs both directions."""
+    """The mutual clause of m3 needs both directions."""
 
     def test_one_way_carry_is_not_mutual(self):
         pa = S.mk_participant(A, visits=[S.mk_visit(f"https://x.qualtrics.com/jfe/form/SV_1?PROLIFIC_PID={C}", ts=T)])
@@ -370,7 +371,7 @@ class LinkSharingTests(unittest.TestCase):
 
 
 class EdgeImportTests(unittest.TestCase):
-    """I6: an Edge install's imported copy of a Chrome visit is not a second, local, visit."""
+    """An Edge install's imported copy of a Chrome visit is not a second, local, visit."""
 
     def test_imported_copy_dropped_keeping_chrome_locality(self):
         url = f"https://app.prolific.com/submissions/complete?cc=X&PROLIFIC_PID={B}"
@@ -391,7 +392,7 @@ class EdgeImportTests(unittest.TestCase):
 
 
 class SpeedTests(unittest.TestCase):
-    """I7: scoring a heavy 30-day install must not take minutes."""
+    """Scoring a heavy 30-day install must not take minutes."""
 
     def test_display_churn_window_is_linear(self):
         sizes = [(1366, 768), (1920, 1080), (1280, 720)]     # three sizes: the window never fires, so every point is scanned
@@ -415,7 +416,7 @@ class SpeedTests(unittest.TestCase):
 
 
 class ScanToleranceTests(unittest.TestCase):
-    """I8: odd shapes inside a point never abort the run; unreadable files are counted and shown."""
+    """Odd shapes inside a point never abort the run; unreadable files are counted and shown."""
 
     def _inp(self, d, name, obj):
         path = Path(d, name)
@@ -479,7 +480,7 @@ class ScanToleranceTests(unittest.TestCase):
 
 
 class DeadCheckTests(unittest.TestCase):
-    """I9: the headless flag survives merging; non-English Google titles are counted in raw mode."""
+    """The headless flag survives merging; non-English Google titles are counted in raw mode."""
 
     def test_headless_flag_reaches_the_participant(self):
         ident = "WEIb_" + A + "1230"

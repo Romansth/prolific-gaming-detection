@@ -16,3 +16,6 @@ reports-team/*
 *_screen_*.html
 *_screen_*.csv
 .DS_Store
+# local editor and assistant state
+.claude/context/
+.claude/settings.local.json

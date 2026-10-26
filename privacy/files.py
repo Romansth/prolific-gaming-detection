@@ -249,6 +249,9 @@ class FileRedactor:
             fh.write(self._dump(self.value(obj)) + "\n")
 
     def _csv(self, text, delimiter, fh):
+        # a NUL byte means a damaged or binary file: refuse it, as the csv module did before Python 3.11
+        if "\x00" in text:
+            raise Refused("unparseable")
         try:
             rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
         except csv.Error:  # e.g. a NUL byte; unparsed, the header check cannot run

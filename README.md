@@ -1,10 +1,10 @@
 # Prolific gaming detection
 
-Screens the browser-extension exports of a study pull for signs that a participant is gaming
-the study: a second Prolific account in the monitored browser, two accounts in one running
-browser, antidetect browsers, concealment tools, a non-US location behind a US clock, and
-weaker supporting patterns. One command turns a pull into a report the research team can act
-on and a token-only copy that can be discussed with Claude.
+Screens the browser-extension exports of a study pull for signs that a participant is gaming the
+study: a second Prolific account in the monitored browser, two accounts in one running browser,
+antidetect browsers, concealment tools, a non-US location behind a US clock, and weaker supporting
+patterns. One command turns a pull into a report the research team can act on and a token-only copy
+that is safe to share or to discuss with Claude or Codex.
 
 Pure Python 3.9 or newer, standard library only. Mac, Linux and Windows.
 
@@ -16,18 +16,22 @@ raw-data/.redaction/  the redaction key and lookup table, created on the first r
 data-redacted/<pull>/ the tokenized copy of the pull                                      [safe to discuss]
 reports-team/         reports with real Prolific ids, for the research team               [never shared]
 reports/              the same reports with ids replaced by tokens                        [safe to discuss]
-fraudscreen/          the screen;  privacy/  the team's redactor;  tests/  synthetic tests
+fraudscreen/          the screen
+privacy/              the team's redactor, vendored (local changes: privacy/tests/test_vendored_changes.py)
+tests/                synthetic data and tests;  tools/  maintenance scripts;  docs/  design note
 ```
 
 ## Install
 
-Mac or Linux: `./setup.sh`. Windows (PowerShell): `.\setup.ps1`. Both create a private `.venv`
-with the Python already on the machine; nothing is downloaded or installed.
+Clone the repository, then run `./setup.sh` (Mac or Linux) or `.\setup.ps1` (Windows PowerShell).
+Both create a private `.venv` with the Python already on the machine; nothing is downloaded or
+installed.
 
 ## Run
 
 1. Put a pull in `raw-data/<pull-name>/` (for example `raw-data/oct-10/`).
-2. `./screen.sh --data raw-data/oct-10 --redact` (Windows: `.\screen.ps1 --data raw-data\oct-10 --redact`).
+2. Run `./screen.sh` (Windows: `.\screen.ps1`). It picks the pull folder modified most recently,
+   prints its name, screens it with redaction, and opens the team report in your browser.
 
 That one command:
 
@@ -35,26 +39,28 @@ That one command:
 - runs the redactor and writes `data-redacted/oct-10/` with `identifiers.csv`;
 - scrubs the report and CSV with the same key and writes `reports/oct-10_screen_<date>.html` and `.csv` (tokens).
 
-`./screen.sh` with no arguments screens the newest pull folder from step 1 (by modification time),
-redacts, and opens the team page in the browser; `--open` opens the page after an explicit run.
-
-Without `--redact` it screens whatever folder it is given (raw or already redacted) and writes
-one report; a screen of `data-redacted/<pull>` goes to `reports/<pull>_screen_<date>_from-redacted.html`
-so it never replaces the scrubbed report, and the two signs that need raw data (M3, m12) are marked not
-available in its appendix (m13 runs without its search patterns). A symlink under `raw-data/` works like a copied folder.
-Other options: `--out`, `--csv`, `--workers N`, `--arms arms.json`, `--min-visits 50`,
-`--exclude-pattern REGEX`, `--key-dir`, `--safe`. Exit codes: 0 report written, 2 bad input or the
-redactor refused, 3 nothing screenable.
-
-Raw or redacted is decided from the file names (a real 24-hex id in a name means raw), never from
-a stray `identifiers.csv`. Two things are refused with exit 2 so that no real id reaches the
-shareable folder: a raw pull placed under `data-redacted/`, and `--out` pointing into `reports/`
-on raw data. Outside the repo layout, `--out X --redact` writes the token-only report to X and the
-real-id one to `X_team`. The report header counts the files that were not read (names that do not
-parse, archives that do not open) and the visits without a time, so a half-read pull is visible.
-
 To find a participant in the token-only report: `./screen.sh lookup <prolific id>` prints the
 `pid_…` token (an identifier or an e-mail address works too). It prints nothing else.
+
+### Other options
+
+To screen a particular pull, name it: `./screen.sh --data raw-data/oct-10 --redact` (Windows:
+`.\screen.ps1 --data raw-data\oct-10 --redact`). Add `--open` to open the team report afterwards.
+
+Without `--redact` it screens whatever folder it is given (raw or already redacted) and writes one
+report; a screen of `data-redacted/<pull>` goes to `reports/<pull>_screen_<date>_from-redacted.html`
+so it never replaces the scrubbed report, and the two signs that need raw data (M3, m12) are marked
+not available in its appendix (m13 runs without its search patterns). A symlink under `raw-data/`
+works like a copied folder. Other options: `--out`, `--csv`, `--workers N`, `--arms arms.json`,
+`--min-visits 50`, `--exclude-pattern REGEX`, `--key-dir`, `--safe`. Exit codes: 0 report written, 2
+bad input or the redactor refused, 3 nothing screenable.
+
+Raw or redacted is decided from the file names (a real 24-hex id in a name means raw), never from a
+stray `identifiers.csv`. Two things are refused with exit 2 so that no real id reaches the shareable
+folder: a raw pull placed under `data-redacted/`, and `--out` pointing into `reports/` on raw data.
+Outside the repo layout, `--out X --redact` writes the token-only report to X and the real-id one to
+`X_team`. The report header counts the files that were not read (names that do not parse, archives
+that do not open) and the visits without a time, so a half-read pull is visible.
 
 The token-only report follows the redactor's own rules: Prolific ids, identifiers and e-mail
 addresses become tokens, URLs keep only the allow-listed hosts and parameters, storage and display
@@ -62,14 +68,16 @@ ids become `dev_` tokens, hosts visited by fewer than 5 participants become `hos
 cohort prefix carried by fewer than 5 identifiers is reduced to its study stem (`WEI…`). The team
 report keeps real ids and URLs but masks e-mail addresses as `[email]`.
 
-Inside a Claude Code session the screen refuses a `raw-data/` folder, and the hook in
-`.claude/settings.json` blocks any call that names `raw-data/`, `reports-team/` or `.redaction/`
-or that reads recursively from the repo root (see `CLAUDE.md`).
+### Claude Code and Codex
 
-Codex gets the same rules. `AGENTS.md` mirrors `CLAUDE.md`, `.codex/hooks.json` runs the same
-guard, and the screen and redactor recognise a Codex shell by `CODEX_THREAD_ID`. Codex runs a
-project hook only after you trust it: open Codex in this folder, run `/hooks` and approve the
-guard (again after either file changes). The in-code refusal works without that step.
+Inside a Claude Code session the screen refuses a `raw-data/` folder, and the hook in
+`.claude/settings.json` blocks any call that names `raw-data/`, `reports-team/` or `.redaction/` or
+that reads recursively from the repo root (see `CLAUDE.md`).
+
+Codex gets the same rules. `AGENTS.md` mirrors `CLAUDE.md`, `.codex/hooks.json` runs the same guard,
+and the screen and redactor recognise a Codex shell by `CODEX_THREAD_ID`. Codex runs a project hook
+only after you trust it: open Codex in this folder, run `/hooks` and approve the guard (again after
+either file changes). The in-code refusal works without that step.
 
 ## Reading the report
 
@@ -106,6 +114,9 @@ survey-only browser, fresh profile, typed study links; m12 shared mail identity 
 m13 foreign-language interface and searches; m14 automated reloads; m15 chatbot during surveys;
 m16 one non-US sign-in episode; m17 a non-US clock for a day.
 
+Why the page is built this way, and the choices still open (which supporting patterns might
+deserve to flag, what the first real pull should check), is in `docs/report-design.md`.
+
 ## What it cannot see
 
 No IP address is in the data: location rests on the device clock and on Google's choice of a
@@ -121,3 +132,8 @@ age only to the month.
 - `python3 tools/make_arm_map.py --repo <AI-extension-testing checkout> --out fraudscreen/arms.json`
   refreshes the configuration-hash to arm-name snapshot.
 - `make dist` zips the package from an allow-list of folders and files; nothing a run wrote is included.
+- To change a sign, edit its module under `fraudscreen/signs/` and its rule text in
+  `fraudscreen/signs/__init__.py`, add a planted case to `tests/synth.py` and its expected signs to
+  `tests/test_end_to_end.py`, then run `make test`. A supporting pattern flags on its own once its tier
+  is `major` in that catalogue; the report and the CSV follow.
+- GitHub runs `make test` on every push and pull request (`.github/workflows/tests.yml`).
